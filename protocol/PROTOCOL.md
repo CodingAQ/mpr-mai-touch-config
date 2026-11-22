@@ -297,7 +297,8 @@ With capability bit 6 set, the tool may instead send a 10-byte request:
 |---:|---:|---|
 | 0 | 2 | `requested_rate_hz:u16`, little-endian, same semantics as above |
 | 2 | 1 | `field_mask:u8` — bit 0 touch, bit 1 filtered, bit 2 baseline, bit 3 status, bit 4 extended; zero or unknown bits set → `ERROR(INVALID_VALUE)` |
-| 3 | 6 | `channel_mask:u48`, little-endian — bit `(12*board + channel)` enables that diagnostic channel; all-zero means every channel enabled |
+| 3 | 1 | `reserved:u8` — send zero; keeps `channel_mask` aligned at offset 4 |
+| 4 | 6 | `channel_mask:u48`, little-endian — bit `(12*board + channel)` enables that diagnostic channel; all-zero means every channel enabled |
 
 A 10-byte request switches the stream to type `0x91` masked frames for the
 rest of the stream; a 2-byte request keeps type `0x90`. Fields that are masked
