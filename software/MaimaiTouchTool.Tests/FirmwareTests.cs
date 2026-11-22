@@ -265,6 +265,17 @@ public sealed class FirmwareTests
         Assert.False(model.IsFlashing);
     }
 
+    // ---- FindBossac 查找逻辑 ----
+
+    [Fact]
+    public void FindBossacLocatesSelfContainedOrRepoBinary()
+    {
+        var bossac = FirmwareFlasher.FindBossac();
+        Assert.NotNull(bossac);
+        Assert.True(File.Exists(bossac));
+        Assert.EndsWith("bossac.exe", bossac, StringComparison.OrdinalIgnoreCase);
+    }
+
     // ---- 本地化 ----
 
     [Fact]
