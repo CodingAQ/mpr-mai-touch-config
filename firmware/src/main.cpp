@@ -528,15 +528,22 @@ void sendDebugFrame(uint32_t nowMs) {
     return streamChannelMask == 0 || (streamChannelMask >> (12u * board + channel)) & 1ULL;
   };
 
+  // 只有真采到硬件触摸位时才允许更新 touchState：extended 段的 hw_touch 与 touch 字段同源，
+  // 所以只要 extended 被请求就必须读；否则全 0 的 touched 会让 finalKeys 清空 touchState，
+  // 连带把防卡键补偿的判定输入（compensation.output 读的就是 touchState）也污染掉。
+  const bool sampledTouch =
+      wantTouch || (streamFieldMask & firmware_state::FieldMaskExtended) != 0;
   uint16_t touched[touchmap::BoardCount] = {};
-  if (wantTouch) {
+  if (sampledTouch) {
     for (uint8_t board = 0; board < touchmap::BoardCount; ++board)
       if (boardEnabled[board]) touched[board] = mpr.touched(board);
   }
   uint16_t filtered[48] = {};
   uint16_t baseline[48] = {};
   uint8_t status[4] = {};
-  if (wantFiltered || wantBaseline)
+  // status 必须单独触发快照：snapshotPartial 在 filtered/baseline 都不需要时只填状态位、不碰 I2C，
+  // 若这里漏掉 wantStatus，只请求状态的外部实现会看到四块板全离线。
+  if (wantFiltered || wantBaseline || wantStatus)
     mpr.snapshotPartial(filtered, baseline, status, wantFiltered, wantBaseline, boardEnabled);
   // 板内被掩码的通道照采样（芯片整板突发读）但按 §5.6 约定传 0。
   if (streamChannelMask != 0) {
@@ -550,7 +557,11 @@ void sendDebugFrame(uint32_t nowMs) {
     }
   }
   bool keys[touchmap::KeyCount] = {};
-  finalKeys(touched, keys);
+  // 没采样就不调 finalKeys（它内部无条件把 touched 写进 touchState），改为沿用上一次的硬件判定。
+  if (sampledTouch) finalKeys(touched, keys);
+  else
+    for (uint8_t key = 0; key < touchmap::KeyCount; ++key)
+      keys[key] = compensation.output(key, touchState.keys()[key], applied);
   // 被通道掩码关掉的键强制为未按下（其通道不采样、无数据）。
   for (uint8_t key = 0; key < touchmap::KeyCount; ++key) {
     const uint16_t packed = applied.keyMap[key];
@@ -578,6 +589,11 @@ void sendDebugFrame(uint32_t nowMs) {
   uint64_t activeBits = 0;
   uint8_t thresholds[touchmap::KeyCount] = {};
   for (uint8_t key = 0; key < touchmap::KeyCount; ++key) {
+    const uint16_t packed = applied.keyMap[key];
+    // 与上面 keys 循环同一套掩码判定：被排除通道的诊断字段按 §5.6 一律传 0，
+    // 否则 0x91 帧会把被掩码通道的活动状态/阈值泄露出去。
+    if (!channelEnabled(static_cast<uint8_t>(packed >> 4), static_cast<uint8_t>(packed & 0x0F)))
+      continue;
     if (touchState.keys()[key]) hwBits |= 1ULL << key;
     thresholds[key] = compensation.threshold(key);
     if (compensation.active(key, applied)) activeBits |= 1ULL << key;
