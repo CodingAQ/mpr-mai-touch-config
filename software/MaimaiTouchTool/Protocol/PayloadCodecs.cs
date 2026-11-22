@@ -64,6 +64,12 @@ public readonly record struct StreamStartResult(ushort AcceptedRateHz, ushort Ac
 public sealed record DebugFrame(uint TimestampMs, ulong TouchBits, ushort[] Filtered, ushort[] Baseline, byte[] ChipStatus, ushort I2cErrors,
     ulong? HardwareTouchBits = null, byte[]? CompensationThresholds = null, ulong CompensationActiveBits = 0)
 {
+    /// <summary>
+    /// 本帧实际携带的字段掩码（0x91 帧回传请求掩码；0x90 帧为 0x0F，带扩展段时为 0x1F）。
+    /// 没有它就无法区分“这个字段没请求”和“这个字段真的是 0”——掩码帧省略的字段一律填零。
+    /// </summary>
+    public byte? FieldMask { get; init; }
+
     public byte[] Encode()
     {
         if (Filtered.Length != 48 || Baseline.Length != 48 || ChipStatus.Length != 4 || TouchBits > 0x3FFFFFFFF ||
@@ -88,7 +94,8 @@ public sealed record DebugFrame(uint TimestampMs, ulong TouchBits, ushort[] Filt
         ulong bits = 0, hardware = 0, active = 0;
         for (var i = 0; i < 5; i++) { bits |= (ulong)b[4 + i] << (8 * i); if (b.Length == 251) { hardware |= (ulong)b[207 + i] << (8 * i); active |= (ulong)b[246 + i] << (8 * i); } }
         return new(BinaryPrimitives.ReadUInt32LittleEndian(b), bits & 0x3FFFFFFFF, filtered, baseline, b[201..205].ToArray(), BinaryPrimitives.ReadUInt16LittleEndian(b[205..]),
-            b.Length == 251 ? hardware & 0x3FFFFFFFF : null, b.Length == 251 ? b[212..246].ToArray() : null, active & 0x3FFFFFFFF);
+            b.Length == 251 ? hardware & 0x3FFFFFFFF : null, b.Length == 251 ? b[212..246].ToArray() : null, active & 0x3FFFFFFFF)
+        { FieldMask = b.Length == 251 ? (byte)0x1F : (byte)0x0F };
     }
 
     /// <summary>
@@ -141,7 +148,8 @@ public sealed record DebugFrame(uint TimestampMs, ulong TouchBits, ushort[] Filt
         }
         return new DebugFrame(timestamp, bits & 0x3FFFFFFFF, filtered, baseline, status, i2cErrors,
             (mask & ProtocolConstants.FieldMaskExtended) != 0 ? hardware & 0x3FFFFFFFF : null,
-            thresholds, active & 0x3FFFFFFFF);
+            thresholds, active & 0x3FFFFFFFF)
+        { FieldMask = mask };
     }
 
     /// <summary>掩码帧负载总长（协议 §5.6）：1 mask + 4 ts + 各字段。用于 STREAM_START 前的本地校验。</summary>
