@@ -16,8 +16,8 @@ namespace MaimaiTouchTool.ViewModels;
 ///                    [扩展字段 44B：hw_touch 5B + comp_thresholds 34B + comp_active 5B] ·
 ///                    主机接收时刻 UTC ticks s64
 ///   fieldMask 位定义：bit0 touch · bit1 filtered · bit2 baseline · bit3 status · bit4 extended。
-///   extended 不是用户开关：协议 1.2 的 251B 扩展帧（硬件触摸判定/补偿阈值/补偿生效位）只要到达就原样存下，
-///   这些字段对离线算法实验是"硬件判定作为对照答案"的关键数据，与 207B 帧不冲突（读方按掩码判别有无）。
+///   extended 是用户开关（协议 1.3）：经 STREAM_START 的 field_mask bit4 控制固件是否下发，
+///   关掉可显著提升回报率，但失去"硬件判定作为对照答案"的次级数据（对离线算法实验有价值）。
 ///   timestamp 与主机接收时刻恒记录（丢帧检测/时间轴依赖它们，不可裁）。
 /// 配置快照随帧头存一份，离线重算阈值判定（delta = base + sens + electrode）时不需要另存会话配置。
 /// </summary>
@@ -48,6 +48,8 @@ public sealed class RecordingModel : NotifyModel
     private bool includeFiltered = true;
     private bool includeBaseline = true;
     private bool includeStatus = true;
+    // 扩展字段（硬件触摸/补偿阈值，44B）：关掉可少一个 USB bank 档位，但失去算法实验的次级对照数据。
+    private bool includeExtended = true;
 
     public RecordingModel() => statusLabel = Localizer.Instance["Rec.StatusIdle"];
 
@@ -55,6 +57,7 @@ public sealed class RecordingModel : NotifyModel
     public bool IncludeFiltered { get => includeFiltered; set { includeFiltered = value; OnPropertyChanged(); } }
     public bool IncludeBaseline { get => includeBaseline; set { includeBaseline = value; OnPropertyChanged(); } }
     public bool IncludeStatus { get => includeStatus; set { includeStatus = value; OnPropertyChanged(); } }
+    public bool IncludeExtended { get => includeExtended; set { includeExtended = value; OnPropertyChanged(); } }
 
     public bool IsRecording { get => isRecording; private set { isRecording = value; OnPropertyChanged(); OnPropertyChanged(nameof(StatusLabel)); } }
     public string StatusLabel { get => statusLabel; private set { statusLabel = value; OnPropertyChanged(); } }

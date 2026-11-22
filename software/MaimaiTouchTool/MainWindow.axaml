@@ -612,12 +612,14 @@
           <Border Classes="panel">
             <StackPanel Spacing="8">
               <TextBlock Classes="section" Margin="0" Text="{DynamicResource Rec.Fields}"/>
-              <StackPanel Orientation="Horizontal" Spacing="18">
-                <CheckBox IsChecked="{Binding Recording.IncludeTouch}" Content="{DynamicResource Rec.FieldTouch}"/>
-                <CheckBox IsChecked="{Binding Recording.IncludeFiltered}" Content="{DynamicResource Rec.FieldFiltered}"/>
-                <CheckBox IsChecked="{Binding Recording.IncludeBaseline}" Content="{DynamicResource Rec.FieldBaseline}"/>
-                <CheckBox IsChecked="{Binding Recording.IncludeStatus}" Content="{DynamicResource Rec.FieldStatus}"/>
-              </StackPanel>
+              <!-- WrapPanel 在当前 Avalonia 版本无 Spacing 属性，用 Margin 代替间距 -->
+              <WrapPanel Orientation="Horizontal">
+                <CheckBox Margin="0,0,18,4" IsChecked="{Binding Recording.IncludeTouch}" Content="{DynamicResource Rec.FieldTouch}"/>
+                <CheckBox Margin="0,0,18,4" IsChecked="{Binding Recording.IncludeFiltered}" Content="{DynamicResource Rec.FieldFiltered}"/>
+                <CheckBox Margin="0,0,18,4" IsChecked="{Binding Recording.IncludeBaseline}" Content="{DynamicResource Rec.FieldBaseline}"/>
+                <CheckBox Margin="0,0,18,4" IsChecked="{Binding Recording.IncludeStatus}" Content="{DynamicResource Rec.FieldStatus}"/>
+                <CheckBox Margin="0,0,0,4" IsChecked="{Binding Recording.IncludeExtended}" Content="{DynamicResource Rec.FieldExtended}"/>
+              </WrapPanel>
               <TextBlock FontSize="11" Foreground="#A9B1BA" TextWrapping="Wrap" Text="{DynamicResource Rec.FormatHint}"/>
             </StackPanel>
           </Border>

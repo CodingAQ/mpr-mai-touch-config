@@ -114,3 +114,80 @@ public class RecordingTests
         Assert.False(recorder.IsRecording);
     }
 }
+
+/// <summary>0x91 掩码帧解码（协议 1.3）：逐字段裁剪组合与字节布局对齐固件 encodeMaskedDebugPayload。</summary>
+public class MaskedDebugFrameTests
+{
+    private static byte[] BuildPayload(byte mask, out uint timestamp, out ulong touch, out ushort[] filtered,
+        out ushort[] baseline, out byte[] status, out ushort i2c, out ulong hw, out byte[] thresholds, out ulong active)
+    {
+        timestamp = 0x11223344; touch = 0xABC; hw = 0x123; active = 0x1E5;
+        filtered = Enumerable.Range(0, 48).Select(i => (ushort)(1000 + i)).ToArray();
+        baseline = Enumerable.Range(0, 48).Select(i => (ushort)(0x200 + i * 4)).ToArray(); // 全部是 4 的倍数
+        status = [1, 2, 3, 4]; i2c = 7;
+        thresholds = Enumerable.Range(0, 34).Select(i => (byte)(i * 2)).ToArray();
+
+        var payload = new List<byte> { mask };
+        payload.AddRange(BitConverter.GetBytes(timestamp));
+        if ((mask & ProtocolConstants.FieldMaskTouch) != 0) for (var i = 0; i < 5; i++) payload.Add((byte)(touch >> (8 * i)));
+        if ((mask & ProtocolConstants.FieldMaskFiltered) != 0) foreach (var f in filtered) payload.AddRange(BitConverter.GetBytes(f));
+        if ((mask & ProtocolConstants.FieldMaskBaseline) != 0) foreach (var b in baseline) payload.Add((byte)(b >> 2)); // 原始 8 位寄存器值
+        if ((mask & ProtocolConstants.FieldMaskStatus) != 0) { payload.AddRange(status); payload.AddRange(BitConverter.GetBytes(i2c)); }
+        if ((mask & ProtocolConstants.FieldMaskExtended) != 0)
+        {
+            for (var i = 0; i < 5; i++) payload.Add((byte)(hw >> (8 * i)));
+            payload.AddRange(thresholds);
+            for (var i = 0; i < 5; i++) payload.Add((byte)(active >> (8 * i)));
+        }
+        return payload.ToArray();
+    }
+
+    [Fact]
+    public void FullMaskRoundTripsAllFields()
+    {
+        var payload = BuildPayload(0x1F, out var ts, out var touch, out var filtered, out var baseline, out var status, out var i2c, out var hw, out var thresholds, out var active);
+        Assert.Equal(PayloadCodecsMaskedLength(0x1F), payload.Length);
+        var frame = DebugFrame.DecodeMasked(payload);
+        Assert.Equal(ts, frame.TimestampMs);
+        Assert.Equal(touch, frame.TouchBits);
+        Assert.Equal(filtered, frame.Filtered);
+        Assert.Equal(baseline, frame.Baseline); // 8 位寄存器值 << 2 无损还原
+        Assert.Equal(status, frame.ChipStatus);
+        Assert.Equal(i2c, frame.I2cErrors);
+        Assert.Equal(hw, frame.HardwareTouchBits);
+        Assert.Equal(thresholds, frame.CompensationThresholds);
+        Assert.Equal(active, frame.CompensationActiveBits);
+    }
+
+    [Fact]
+    public void TouchOnlyPayloadDecodes()
+    {
+        var payload = BuildPayload(ProtocolConstants.FieldMaskTouch, out var ts, out var touch, out _, out _, out _, out _, out _, out _, out _);
+        Assert.Equal(10, payload.Length); // mask 1 + ts 4 + touch 5
+        var frame = DebugFrame.DecodeMasked(payload);
+        Assert.Equal(ts, frame.TimestampMs);
+        Assert.Equal(touch, frame.TouchBits);
+        Assert.All(frame.Filtered, f => Assert.Equal(0, f));
+        Assert.All(frame.Baseline, b => Assert.Equal(0, b));
+        Assert.Null(frame.HardwareTouchBits);
+    }
+
+    [Fact]
+    public void FilteredOnlyPayloadDecodes()
+    {
+        var payload = BuildPayload(ProtocolConstants.FieldMaskFiltered, out var ts, out _, out var filtered, out _, out _, out _, out _, out _, out _);
+        Assert.Equal(101, payload.Length);
+        var frame = DebugFrame.DecodeMasked(payload);
+        Assert.Equal(ts, frame.TimestampMs);
+        Assert.Equal(filtered, frame.Filtered);
+        Assert.Equal(0UL, frame.TouchBits);
+        Assert.All(frame.Baseline, b => Assert.Equal(0, b));
+    }
+
+    private static int PayloadCodecsMaskedLength(byte mask) => 5
+        + ((mask & ProtocolConstants.FieldMaskTouch) != 0 ? 5 : 0)
+        + ((mask & ProtocolConstants.FieldMaskFiltered) != 0 ? 96 : 0)
+        + ((mask & ProtocolConstants.FieldMaskBaseline) != 0 ? 48 : 0)
+        + ((mask & ProtocolConstants.FieldMaskStatus) != 0 ? 6 : 0)
+        + ((mask & ProtocolConstants.FieldMaskExtended) != 0 ? 44 : 0);
+}

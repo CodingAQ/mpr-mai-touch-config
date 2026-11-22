@@ -75,6 +75,8 @@ public sealed partial class MainViewModel : NotifyModel, IAsyncDisposable
     private string? mappingHeadline;
     private readonly MappingHistory mappingHistory = new();
     private bool replayingHistory;
+    // 设备是否支持掩码遥测（VERSION 能力位 bit6，连接时记录）。false 时开流退回旧 2B 请求。
+    private bool supportsMaskedStream;
     // 回报率测试：被动数帧（流正常跑就行），固定窗口 5 秒。
     private bool rateTestActive;
     private long rateTestFrames;
@@ -467,6 +469,7 @@ public sealed partial class MainViewModel : NotifyModel, IAsyncDisposable
             FirmwareInfo.HasKeyMappingCapability = (capabilities & ProtocolConstants.CapabilityKeyMapping) != 0;
             workflow.SupportsCompensation = (capabilities & ProtocolConstants.CapabilityCompensation) != 0;
             Editor.SupportsCompensation = workflow.SupportsCompensation;
+            supportsMaskedStream = (capabilities & ProtocolConstants.CapabilityMaskedStream) != 0;
             if ((capabilities & ProtocolConstants.CapabilityKeyMapping) == 0) throw new NotSupportedException(Localizer.Instance["Msg.FirmwareTooOld"]);
             await EnterConfigAsync(token);
             var deviceConfig = await ReadConfigWithRecoveryAsync(token);
@@ -945,6 +948,19 @@ public sealed partial class MainViewModel : NotifyModel, IAsyncDisposable
         SignalChart.Clear();
         try
         {
+            // 掩码遥测（协议 1.3）：固件支持时按需下发掩码——固件跳过被掩字段的 I2C 采样并只发请求的字段，
+            // 帧变小（跨更少 USB bank），回报率随之提升。
+            // 掩码里 touch/filtered/baseline/status 恒开：信号曲线页与校准向导共用这路流，
+            // 缺任一字段会导致 valid 判定失败（曲线断成散点、报"最新样本无效"）。
+            // 可调的只有 extended（44B，关掉即可拿到大部分回报率收益）；录制页五个开关只控制 .mtr 落盘内容。
+            byte? fieldMask = null;
+            if (supportsMaskedStream)
+            {
+                var mask = (byte)(ProtocolConstants.FieldMaskTouch | ProtocolConstants.FieldMaskFiltered
+                    | ProtocolConstants.FieldMaskBaseline | ProtocolConstants.FieldMaskStatus);
+                if (Recording.IncludeExtended) mask |= ProtocolConstants.FieldMaskExtended;
+                fieldMask = mask;
+            }
             await transport.StreamDebugEventsAwaitedAsync(ProtocolConstants.DefaultStreamRateHz, async sample =>
             {
                 // 录制落盘与回报率计数都留在后台线程（回调本身被 await 串行化，磁盘 IO 不会挤占 UI 线程）。
@@ -958,7 +974,8 @@ public sealed partial class MainViewModel : NotifyModel, IAsyncDisposable
                     for (var i = 0; i < TouchKeys.Count; i++) TouchKeys[i].IsPressed = (sample.Frame.TouchBits & (1UL << i)) != 0;
                 }, DispatcherPriority.Background);
             }, async error => await Dispatcher.UIThread.InvokeAsync(() => Telemetry.MarkMalformed(Localizer.Instance["Msg.MalformedFrame"] + error.Message)), source.Token,
-                async info => await Dispatcher.UIThread.InvokeAsync(() => Telemetry.SetAcceptedRate(info.AcceptedRateHz, info.ActualRateHz)));
+                async info => await Dispatcher.UIThread.InvokeAsync(() => Telemetry.SetAcceptedRate(info.AcceptedRateHz, info.ActualRateHz)),
+                fieldMask, ProtocolConstants.AllChannelsMask);
             Telemetry.Stop();
         }
         catch (OperationCanceledException) { Telemetry.Stop(); }

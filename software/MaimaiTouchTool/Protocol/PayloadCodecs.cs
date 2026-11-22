@@ -90,6 +90,67 @@ public sealed record DebugFrame(uint TimestampMs, ulong TouchBits, ushort[] Filt
         return new(BinaryPrimitives.ReadUInt32LittleEndian(b), bits & 0x3FFFFFFFF, filtered, baseline, b[201..205].ToArray(), BinaryPrimitives.ReadUInt16LittleEndian(b[205..]),
             b.Length == 251 ? hardware & 0x3FFFFFFFF : null, b.Length == 251 ? b[212..246].ToArray() : null, active & 0x3FFFFFFFF);
     }
+
+    /// <summary>
+    /// 解码 0x91 掩码调试帧（协议 §5.6，可变长）：fieldMask u8 + timestamp u32 + 按掩码排列的字段。
+    /// 字段顺序与 .mtr 存储记录一致：touch 5B · filtered 48×u16 · baseline 48×u8（原始寄存器值，&lt;&lt;2 还原）·
+    /// status 4B + i2c_errors u16 · extended 44B（hw_touch 5B + 补偿阈值 34B + 补偿生效 5B）。
+    /// 未开启的字段填零值（filtered/baseline 全 0），调用方按掩码判断有效性。
+    /// </summary>
+    public static DebugFrame DecodeMasked(ReadOnlySpan<byte> b)
+    {
+        if (b.Length < 5) throw new FormatException("Masked debug frame too short.");
+        var mask = b[0];
+        var offset = 5; // mask u8 + timestamp u32
+        var timestamp = BinaryPrimitives.ReadUInt32LittleEndian(b[1..]);
+        ulong bits = 0, hardware = 0, active = 0;
+        if ((mask & ProtocolConstants.FieldMaskTouch) != 0)
+        {
+            if (b.Length < offset + 5) throw new FormatException("Masked frame truncated at touch.");
+            for (var i = 0; i < 5; i++) bits |= (ulong)b[offset + i] << (8 * i);
+            offset += 5;
+        }
+        var filtered = new ushort[48];
+        if ((mask & ProtocolConstants.FieldMaskFiltered) != 0)
+        {
+            if (b.Length < offset + 96) throw new FormatException("Masked frame truncated at filtered.");
+            for (var i = 0; i < 48; i++) filtered[i] = BinaryPrimitives.ReadUInt16LittleEndian(b[(offset + i * 2)..]);
+            offset += 96;
+        }
+        var baseline = new ushort[48];
+        if ((mask & ProtocolConstants.FieldMaskBaseline) != 0)
+        {
+            if (b.Length < offset + 48) throw new FormatException("Masked frame truncated at baseline.");
+            for (var i = 0; i < 48; i++) baseline[i] = (ushort)(b[offset + i] << 2); // 原始 8 位寄存器值还原
+            offset += 48;
+        }
+        var status = new byte[4]; ushort i2cErrors = 0;
+        if ((mask & ProtocolConstants.FieldMaskStatus) != 0)
+        {
+            if (b.Length < offset + 6) throw new FormatException("Masked frame truncated at status.");
+            for (var i = 0; i < 4; i++) status[i] = b[offset + i];
+            i2cErrors = BinaryPrimitives.ReadUInt16LittleEndian(b[(offset + 4)..]);
+            offset += 6;
+        }
+        byte[]? thresholds = null;
+        if ((mask & ProtocolConstants.FieldMaskExtended) != 0)
+        {
+            if (b.Length < offset + 44) throw new FormatException("Masked frame truncated at extended.");
+            for (var i = 0; i < 5; i++) { hardware |= (ulong)b[offset + i] << (8 * i); active |= (ulong)b[offset + 39 + i] << (8 * i); }
+            thresholds = b.Slice(offset + 5, 34).ToArray();
+        }
+        return new DebugFrame(timestamp, bits & 0x3FFFFFFFF, filtered, baseline, status, i2cErrors,
+            (mask & ProtocolConstants.FieldMaskExtended) != 0 ? hardware & 0x3FFFFFFFF : null,
+            thresholds, active & 0x3FFFFFFFF);
+    }
+
+    /// <summary>掩码帧负载总长（协议 §5.6）：1 mask + 4 ts + 各字段。用于 STREAM_START 前的本地校验。</summary>
+    public static int MaskedDebugPayloadLength(byte mask) => 5
+        + ((mask & ProtocolConstants.FieldMaskTouch) != 0 ? 5 : 0)
+        + ((mask & ProtocolConstants.FieldMaskFiltered) != 0 ? 96 : 0)
+        + ((mask & ProtocolConstants.FieldMaskBaseline) != 0 ? 48 : 0)
+        + ((mask & ProtocolConstants.FieldMaskStatus) != 0 ? 6 : 0)
+        + ((mask & ProtocolConstants.FieldMaskExtended) != 0 ? 44 : 0);
 }
 
 public static class LegacyCodec
