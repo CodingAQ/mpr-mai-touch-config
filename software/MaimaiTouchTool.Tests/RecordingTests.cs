@@ -37,7 +37,9 @@ public class RecordingTests
         // 文件头：魔数、格式版本、开始时刻、93 字节配置快照
         Assert.Equal(RecordingModel.Magic, BitConverter.ToUInt32(bytes, 0));
         Assert.Equal(RecordingModel.FormatVersion, BitConverter.ToUInt16(bytes, 4));
-        Assert.True(BitConverter.ToInt64(bytes, 8) <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        // 必须是“刚刚”的合法时间：只断言 <= now 的话，写 0 甚至写负值也能通过，等于没测
+        var headerStartMs = BitConverter.ToInt64(bytes, 8);
+        Assert.InRange(headerStartMs, 1, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         Assert.Equal(config.Encode(), bytes[16..(16 + ProtocolConstants.ConfigBlobLength)]);
 
         // 逐条记录布局：mask@0(1) · ts@1(4) · touch@5(5) · filtered@10(96) · baseline@106(48) · status@154(4+2) · ticks@160(8)
@@ -105,6 +107,25 @@ public class RecordingTests
     }
 
     [Fact]
+    public void ExtendedToggleIsHonoured()
+    {
+        // 扩展段是真·用户开关：关掉后即使帧里带着 HardwareTouchBits（旧固件/掩码未生效），也不能写进文件。
+        var recorder = new RecordingModel { IncludeExtended = false };
+        var frame = new DebugFrame(7, 0, new ushort[48], new ushort[48], [7, 7, 7, 7], 0,
+            HardwareTouchBits: 0x1F, CompensationThresholds: new byte[34], CompensationActiveBits: 0x15);
+
+        recorder.Start(ConfigBlob.Defaults());
+        recorder.AddFrame(frame, DateTimeOffset.UtcNow);
+        recorder.Stop();
+
+        var bytes = File.ReadAllBytes(recorder.FilePath);
+        var record = bytes.AsSpan(RecordingModel.HeaderSize..);
+        Assert.Equal(0, record[0] & RecordingModel.MaskExtended);
+        // 其余四个字段仍按默认开关写入：1 mask + 4 ts + 5 touch + 96 filtered + 48 baseline + 6 status + 8 ticks
+        Assert.Equal(1 + 4 + 5 + 96 + 48 + 6 + 8, bytes.Length - RecordingModel.HeaderSize);
+    }
+
+    [Fact]
     public void AddFrameWithoutStartIsNoOp()
     {
         var recorder = new RecordingModel();
@@ -127,13 +148,15 @@ public class MaskedDebugFrameTests
         status = [1, 2, 3, 4]; i2c = 7;
         thresholds = Enumerable.Range(0, 34).Select(i => (byte)(i * 2)).ToArray();
 
+        // 这里刻意用字面量而不是 ProtocolConstants.FieldMask*：测试夹具与生产解码器必须各自独立，
+        // 否则常量值一旦改错，两边一起错，测试照样绿（bit 33-i 那类镜像 bug 就是这么溜过去的）。
         var payload = new List<byte> { mask };
         payload.AddRange(BitConverter.GetBytes(timestamp));
-        if ((mask & ProtocolConstants.FieldMaskTouch) != 0) for (var i = 0; i < 5; i++) payload.Add((byte)(touch >> (8 * i)));
-        if ((mask & ProtocolConstants.FieldMaskFiltered) != 0) foreach (var f in filtered) payload.AddRange(BitConverter.GetBytes(f));
-        if ((mask & ProtocolConstants.FieldMaskBaseline) != 0) foreach (var b in baseline) payload.Add((byte)(b >> 2)); // 原始 8 位寄存器值
-        if ((mask & ProtocolConstants.FieldMaskStatus) != 0) { payload.AddRange(status); payload.AddRange(BitConverter.GetBytes(i2c)); }
-        if ((mask & ProtocolConstants.FieldMaskExtended) != 0)
+        if ((mask & 0x01) != 0) for (var i = 0; i < 5; i++) payload.Add((byte)(touch >> (8 * i)));
+        if ((mask & 0x02) != 0) foreach (var f in filtered) payload.AddRange(BitConverter.GetBytes(f));
+        if ((mask & 0x04) != 0) foreach (var b in baseline) payload.Add((byte)(b >> 2)); // 原始 8 位寄存器值
+        if ((mask & 0x08) != 0) { payload.AddRange(status); payload.AddRange(BitConverter.GetBytes(i2c)); }
+        if ((mask & 0x10) != 0)
         {
             for (var i = 0; i < 5; i++) payload.Add((byte)(hw >> (8 * i)));
             payload.AddRange(thresholds);
@@ -162,11 +185,12 @@ public class MaskedDebugFrameTests
     [Fact]
     public void TouchOnlyPayloadDecodes()
     {
-        var payload = BuildPayload(ProtocolConstants.FieldMaskTouch, out var ts, out var touch, out _, out _, out _, out _, out _, out _, out _);
+        var payload = BuildPayload(0x01, out var ts, out var touch, out _, out _, out _, out _, out _, out _, out _);
         Assert.Equal(10, payload.Length); // mask 1 + ts 4 + touch 5
         var frame = DebugFrame.DecodeMasked(payload);
         Assert.Equal(ts, frame.TimestampMs);
         Assert.Equal(touch, frame.TouchBits);
+        Assert.Equal<byte?>(0x01, frame.FieldMask); // 回传掩码：调用方靠它区分“没请求”和“真的是 0”
         Assert.All(frame.Filtered, f => Assert.Equal(0, f));
         Assert.All(frame.Baseline, b => Assert.Equal(0, b));
         Assert.Null(frame.HardwareTouchBits);
@@ -175,7 +199,7 @@ public class MaskedDebugFrameTests
     [Fact]
     public void FilteredOnlyPayloadDecodes()
     {
-        var payload = BuildPayload(ProtocolConstants.FieldMaskFiltered, out var ts, out _, out var filtered, out _, out _, out _, out _, out _, out _);
+        var payload = BuildPayload(0x02, out var ts, out _, out var filtered, out _, out _, out _, out _, out _, out _);
         Assert.Equal(101, payload.Length);
         var frame = DebugFrame.DecodeMasked(payload);
         Assert.Equal(ts, frame.TimestampMs);
@@ -185,9 +209,9 @@ public class MaskedDebugFrameTests
     }
 
     private static int PayloadCodecsMaskedLength(byte mask) => 5
-        + ((mask & ProtocolConstants.FieldMaskTouch) != 0 ? 5 : 0)
-        + ((mask & ProtocolConstants.FieldMaskFiltered) != 0 ? 96 : 0)
-        + ((mask & ProtocolConstants.FieldMaskBaseline) != 0 ? 48 : 0)
-        + ((mask & ProtocolConstants.FieldMaskStatus) != 0 ? 6 : 0)
-        + ((mask & ProtocolConstants.FieldMaskExtended) != 0 ? 44 : 0);
+        + ((mask & 0x01) != 0 ? 5 : 0)
+        + ((mask & 0x02) != 0 ? 96 : 0)
+        + ((mask & 0x04) != 0 ? 48 : 0)
+        + ((mask & 0x08) != 0 ? 6 : 0)
+        + ((mask & 0x10) != 0 ? 44 : 0);
 }
