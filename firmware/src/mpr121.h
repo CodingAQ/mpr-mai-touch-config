@@ -46,6 +46,14 @@ class Mpr121Hardware {
   void snapshot(uint16_t filteredValues[touchmap::ChannelCount],
                 uint16_t baselineValues[touchmap::ChannelCount],
                 uint8_t status[touchmap::BoardCount]);
+  // 按需快照：不读的字段置零、整板被掩码时跳过该板全部 I2C 事务（录制掩码模式省 I2C 的关键路径）。
+  // wantFiltered/wantBaseline 控制两组突发读；boardEnabled[board] 为 false 的板连 TOUCHSTATUS 之外的一切都不读。
+  // status 仍填充 online/initialized 位（无需 I2C），baseline 有效位（bit2）仅在确实读了 baseline 且成功时置位。
+  void snapshotPartial(uint16_t filteredValues[touchmap::ChannelCount],
+                       uint16_t baselineValues[touchmap::ChannelCount],
+                       uint8_t status[touchmap::BoardCount],
+                       bool wantFiltered, bool wantBaseline,
+                       const bool* boardEnabled);
   bool boardOnline(uint8_t board) const;
   bool allOnline() const;
   void setHostSample(uint8_t board, uint8_t channel, uint16_t filteredValue,

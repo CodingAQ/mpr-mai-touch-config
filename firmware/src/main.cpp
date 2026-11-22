@@ -128,6 +128,10 @@ bool cacheResponse = false;
 uint32_t lastConfigActivity = 0;
 uint32_t nextStreamFrame = 0;
 uint16_t streamRate = 0;
+// 录制掩码模式（协议 1.3）：0x91 可变长帧。旧工具发 2B STREAM_START 时全部置默认值，行为与 0x90 完全一致。
+bool streamMasked = false;            // true = 发 0x91（按掩码裁剪），false = 发 0x90 全家桶
+uint8_t streamFieldMask = 0;          // firmware_state::FieldMask* 位组合
+uint64_t streamChannelMask = 0;       // 48 位，board 优先：bit(12*board+channel)；0 = 全开
 uint32_t currentTime = 0;
 uint8_t legacyCommand[protocol::LegacyCommandLength] = {};
 protocol::FrameParser framedParser;
@@ -426,6 +430,24 @@ void handleFrame(const protocol::Frame& frame) {
       const uint16_t requested = static_cast<uint16_t>(frame.payload[0]) |
                                  (static_cast<uint16_t>(frame.payload[1]) << 8);
       const uint16_t accepted = requested == 0 ? 100 : requested;
+      // 2B = 旧版负载（全字段全通道，0x90 帧）；10B = 掩码负载（rate + field_mask + channel_mask u48，0x91 帧）。
+      if (frame.length == 10) {
+        uint64_t channelMask = 0;
+        for (uint8_t i = 0; i < 6; ++i)
+          channelMask |= static_cast<uint64_t>(frame.payload[4 + i]) << (8 * i);
+        const uint8_t fieldMask = frame.payload[2];
+        if (fieldMask == 0 || (fieldMask & ~static_cast<uint8_t>(0x1F)) != 0) {
+          sendError(frame.type, frame.sequence, protocol::StatusInvalidValue);
+          return;
+        }
+        streamMasked = true;
+        streamFieldMask = fieldMask;
+        streamChannelMask = channelMask;
+      } else {
+        streamMasked = false;
+        streamFieldMask = 0x1F;  // 全字段（含扩展）
+        streamChannelMask = 0;   // 全通道
+      }
       if (accepted == 0 || accepted > mpr121_validation::MaxStreamRateHz ||
           !mpr.startAll(applied)) {
         sendError(frame.type, frame.sequence, protocol::StatusHardware);
@@ -491,24 +513,82 @@ void loopGame() {
 }
 
 void sendDebugFrame(uint32_t nowMs) {
-  uint8_t payload[firmware_state::ExtendedDebugPayloadLength] = {};
+  const bool wantTouch = (streamFieldMask & firmware_state::FieldMaskTouch) != 0;
+  const bool wantFiltered = (streamFieldMask & firmware_state::FieldMaskFiltered) != 0;
+  const bool wantBaseline = (streamFieldMask & firmware_state::FieldMaskBaseline) != 0;
+  const bool wantStatus = (streamFieldMask & firmware_state::FieldMaskStatus) != 0;
+  // 通道掩码：bit(12*board+channel)；全 0 视为全开。整板无启用通道时跳过该板全部 I2C 事务。
+  bool boardEnabled[touchmap::BoardCount] = {};
+  for (uint8_t board = 0; board < touchmap::BoardCount; ++board) {
+    if (streamChannelMask == 0) { boardEnabled[board] = true; continue; }
+    const uint64_t boardBits = streamChannelMask >> (12u * board);
+    boardEnabled[board] = (boardBits & 0xFFFULL) != 0;
+  }
+  const auto channelEnabled = [&](uint8_t board, uint8_t channel) {
+    return streamChannelMask == 0 || (streamChannelMask >> (12u * board + channel)) & 1ULL;
+  };
+
+  uint16_t touched[touchmap::BoardCount] = {};
+  if (wantTouch) {
+    for (uint8_t board = 0; board < touchmap::BoardCount; ++board)
+      if (boardEnabled[board]) touched[board] = mpr.touched(board);
+  }
   uint16_t filtered[48] = {};
   uint16_t baseline[48] = {};
   uint8_t status[4] = {};
-  uint16_t touched[touchmap::BoardCount] = {};
-  for (uint8_t board = 0; board < touchmap::BoardCount; ++board) touched[board] = mpr.touched(board);
-  mpr.snapshot(filtered, baseline, status);
+  if (wantFiltered || wantBaseline)
+    mpr.snapshotPartial(filtered, baseline, status, wantFiltered, wantBaseline, boardEnabled);
+  // 板内被掩码的通道照采样（芯片整板突发读）但按 §5.6 约定传 0。
+  if (streamChannelMask != 0) {
+    for (uint8_t channel = 0; channel < touchmap::ChannelCount; ++channel) {
+      const uint8_t board = static_cast<uint8_t>(channel / 12);
+      const uint8_t port = static_cast<uint8_t>(channel % 12);
+      if (!channelEnabled(board, port)) {
+        filtered[channel] = 0;
+        baseline[channel] = 0;
+      }
+    }
+  }
   bool keys[touchmap::KeyCount] = {};
   finalKeys(touched, keys);
-  firmware_state::encodeDebugPayload(nowMs, keys, filtered, baseline, status,
-                                     mpr.i2cErrors(), payload, sizeof(payload));
-  // 207..211 hardware bits; 212..245 candidate thresholds /4; 246..250 active bits.
+  // 被通道掩码关掉的键强制为未按下（其通道不采样、无数据）。
   for (uint8_t key = 0; key < touchmap::KeyCount; ++key) {
-    if (touchState.keys()[key]) payload[207 + key / 8] |= 1U << (key % 8);
-    payload[212 + key] = compensation.threshold(key);
-    if (compensation.active(key, applied)) payload[246 + key / 8] |= 1U << (key % 8);
+    const uint16_t packed = applied.keyMap[key];
+    if (!channelEnabled(static_cast<uint8_t>(packed >> 4), static_cast<uint8_t>(packed & 0x0F)))
+      keys[key] = false;
   }
-  sendFrame(protocol::TypeDebugFrame, 0, payload, sizeof(payload));
+
+  if (!streamMasked) {
+    // 旧 0x90 全家桶路径：布局与协议 1.2 完全一致，工具旧解码零改动。
+    uint8_t payload[firmware_state::ExtendedDebugPayloadLength] = {};
+    firmware_state::encodeDebugPayload(nowMs, keys, filtered, baseline, status,
+                                       mpr.i2cErrors(), payload, sizeof(payload));
+    // 207..211 hardware bits; 212..245 candidate thresholds /4; 246..250 active bits.
+    for (uint8_t key = 0; key < touchmap::KeyCount; ++key) {
+      if (touchState.keys()[key]) payload[207 + key / 8] |= 1U << (key % 8);
+      payload[212 + key] = compensation.threshold(key);
+      if (compensation.active(key, applied)) payload[246 + key / 8] |= 1U << (key % 8);
+    }
+    sendFrame(protocol::TypeDebugFrame, 0, payload, sizeof(payload));
+    return;
+  }
+
+  // 0x91 掩码帧：硬件触摸位/补偿数据随 extended 位（bit4）携带，数据与 0x90 的 207..250 区间同源。
+  uint64_t hwBits = 0;
+  uint64_t activeBits = 0;
+  uint8_t thresholds[touchmap::KeyCount] = {};
+  for (uint8_t key = 0; key < touchmap::KeyCount; ++key) {
+    if (touchState.keys()[key]) hwBits |= 1ULL << key;
+    thresholds[key] = compensation.threshold(key);
+    if (compensation.active(key, applied)) activeBits |= 1ULL << key;
+  }
+  uint8_t payload[firmware_state::MaxMaskedDebugPayloadLength] = {};
+  const bool ok = firmware_state::encodeMaskedDebugPayload(
+      streamFieldMask, nowMs, keys, filtered, baseline, status, mpr.i2cErrors(),
+      hwBits, thresholds, activeBits, payload, sizeof(payload));
+  if (!ok) return;
+  sendFrame(protocol::TypeDebugFrameMasked, 0, payload,
+            firmware_state::maskedDebugPayloadSize(streamFieldMask));
 }
 
 }  // namespace

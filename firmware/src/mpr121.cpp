@@ -29,7 +29,6 @@ bool readRegisters(uint8_t address, uint8_t reg, uint8_t* buffer, uint8_t count)
 bool Mpr121Hardware::begin() {
 #ifdef ARDUINO
   Wire.begin();
-  Wire.setClock(400000UL);
   bool allPresent = true;
   for (uint8_t board = 0; board < touchmap::BoardCount; ++board) {
     online_[board] = devices[board].begin(touchmap::BoardAddresses[board], &Wire);
@@ -47,6 +46,10 @@ bool Mpr121Hardware::begin() {
       recordI2cError(board);
     }
   }
+  // 必须在 Adafruit begin() 之后设置：Adafruit_I2CDevice::begin() 内部调用 Wire.begin()，
+  // 会重新初始化 SERCOM 并把波特率打回默认 100 kHz——setClock 放在它之前会被静默覆盖，
+  // 表现为 filtered 快照耗时 ~9ms（100kHz）而非 ~2.5ms（400kHz），拖低全部遥测档位回报率。
+  Wire.setClock(400000UL);
   return allPresent;
 #else
   for (uint8_t board = 0; board < touchmap::BoardCount; ++board) {
@@ -330,6 +333,61 @@ void Mpr121Hardware::snapshot(uint16_t filteredValues[touchmap::ChannelCount],
       const uint8_t index = static_cast<uint8_t>(board * 12 + channel);
       filteredValues[index] = hostFiltered_[index];
       baselineValues[index] = hostBaseline_[index];
+      if (baselineValues[index] != 0) status[board] |= 4;
+    }
+    i2cErrorSinceSnapshot_[board] = false;
+#endif
+  }
+}
+
+void Mpr121Hardware::snapshotPartial(uint16_t filteredValues[touchmap::ChannelCount],
+                                     uint16_t baselineValues[touchmap::ChannelCount],
+                                     uint8_t status[touchmap::BoardCount],
+                                     bool wantFiltered, bool wantBaseline,
+                                     const bool* boardEnabled) {
+  for (uint8_t board = 0; board < touchmap::BoardCount; ++board) {
+    status[board] = static_cast<uint8_t>((online_[board] ? 1 : 0) |
+                                         (initialized_[board] ? 2 : 0) |
+                                         (i2cErrorSinceSnapshot_[board] ? 8 : 0));
+    const bool boardActive = boardEnabled != nullptr && board < touchmap::BoardCount && boardEnabled[board];
+    if (!online_[board] || !boardActive || (!wantFiltered && !wantBaseline)) {
+      // 整板被掩码 / 无字段需求：不发起任何 I2C 事务，数据置零，状态只报无需读寄存器的位。
+      for (uint8_t channel = 0; channel < 12; ++channel) {
+        const uint8_t index = static_cast<uint8_t>(board * 12 + channel);
+        filteredValues[index] = 0;
+        baselineValues[index] = 0;
+      }
+      continue;
+    }
+#ifdef ARDUINO
+    const uint8_t address = touchmap::BoardAddresses[board];
+    uint8_t filteredRaw[24] = {};
+    uint8_t baselineRaw[12] = {};
+    bool filteredOk = true;
+    bool baselineOk = true;
+    if (wantFiltered) {
+      filteredOk = readRegisters(address, 0x04, filteredRaw, 24);
+      if (!filteredOk) recordI2cError(board);
+    }
+    if (wantBaseline) {
+      baselineOk = readRegisters(address, 0x1E, baselineRaw, 12);
+      if (!baselineOk) recordI2cError(board);
+    }
+    for (uint8_t channel = 0; channel < 12; ++channel) {
+      const uint8_t index = static_cast<uint8_t>(board * 12 + channel);
+      filteredValues[index] = filteredOk
+                                  ? static_cast<uint16_t>(filteredRaw[channel * 2]) |
+                                        (static_cast<uint16_t>(filteredRaw[channel * 2 + 1]) << 8)
+                                  : 0;
+      baselineValues[index] = baselineOk ? static_cast<uint16_t>(baselineRaw[channel]) << 2 : 0;
+      if (baselineValues[index] != 0) status[board] |= 4;
+    }
+    i2cErrorSinceSnapshot_[board] = false;
+#else
+    for (uint8_t channel = 0; channel < 12; ++channel) {
+      const uint8_t index = static_cast<uint8_t>(board * 12 + channel);
+      filteredValues[index] = wantFiltered ? hostFiltered_[index] : 0;
+      baselineValues[index] = wantBaseline ? hostBaseline_[index] : 0;
       if (baselineValues[index] != 0) status[board] |= 4;
     }
     i2cErrorSinceSnapshot_[board] = false;

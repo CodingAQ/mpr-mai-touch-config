@@ -362,6 +362,65 @@ static void checkDebugPayload() {
   assert(!firmware_state::encodeDebugPayload(0, keys, filtered, baseline, status, 0, payload, 206));
 }
 
+// 掩码调试帧（0x91）编码：按 field_mask 逐字段校验布局与值。
+static void checkMaskedDebugPayload() {
+  bool keys[protocol::KeyCount] = {};
+  keys[0] = true;
+  keys[33] = true;
+  uint16_t filtered[touchmap::ChannelCount] = {};
+  uint16_t baseline[touchmap::ChannelCount] = {};
+  for (uint8_t i = 0; i < touchmap::ChannelCount; ++i) {
+    filtered[i] = static_cast<uint16_t>(0x100 + i);
+    baseline[i] = static_cast<uint16_t>(0x200 + i);  // 4 的倍数（8 位寄存器 ×4）
+  }
+  const uint8_t status[touchmap::BoardCount] = {7, 7, 7, 7};
+  const uint8_t thresholds[touchmap::KeyCount] = {};
+
+  // 只留 filtered：mask + ts + 96 = 101
+  {
+    const uint8_t mask = firmware_state::FieldMaskFiltered;
+    assert(firmware_state::maskedDebugPayloadSize(mask) == 101);
+    uint8_t payload[firmware_state::MaxMaskedDebugPayloadLength] = {};
+    assert(firmware_state::encodeMaskedDebugPayload(mask, 0x78563412, keys, filtered, baseline,
+                                                    status, 0, 0, thresholds, 0, payload, sizeof(payload)));
+    assert(payload[0] == mask);
+    assert(payload[1] == 0x12 && payload[4] == 0x78);
+    assert(payload[5] == 0x00 && payload[6] == 0x01);  // filtered[0] = 0x100
+    assert(payload[5 + 94] == 47 && payload[5 + 95] == 0x01);  // filtered[47] = 0x12F
+    assert(payload[101] == 0);  // 负载止于 size=101，之后是清零缓冲
+  }
+
+  // 全字段（含 extended）：204
+  {
+    const uint8_t mask = 0x1F;
+    assert(firmware_state::maskedDebugPayloadSize(mask) == 204);
+    uint8_t payload[firmware_state::MaxMaskedDebugPayloadLength] = {};
+    uint8_t thresholds2[touchmap::KeyCount] = {};
+    for (uint8_t i = 0; i < touchmap::KeyCount; ++i) thresholds2[i] = static_cast<uint8_t>(i);
+    assert(firmware_state::encodeMaskedDebugPayload(mask, 1, keys, filtered, baseline, status,
+                                                    0xABCD, 0x4000000001ULL, thresholds2,
+                                                    0x4000000002ULL, payload, sizeof(payload)));
+    assert(payload[0] == mask);
+    assert(payload[5] == 1 && payload[9] == 2);  // key0 → bit0；key33 → bit33
+    assert(payload[106] == 0x80 && payload[107] == 0x80);  // baseline[1]=0x201>>2=0x80（baseline[i]=0x200+i，i=0..3 都落在 0x80）
+    assert(payload[106 + 47] == static_cast<uint8_t>((0x200 + 47) >> 2));
+    assert(payload[155] == 7 && payload[158] == 0xCD && payload[159] == 0xAB);  // status + i2c
+    assert(payload[160] == 1 && payload[164] == 0x40);  // hw_touch 低 5B
+    assert(payload[165] == 0);  // thresholds[0] = 0
+    assert(payload[165 + 33] == 33);
+    assert(payload[199] == 2 && payload[203] == 0x40);  // active bits 低 5B
+  }
+
+  // 容量不足 / 空 mask 拒绝
+  {
+    uint8_t small[10] = {};
+    assert(!firmware_state::encodeMaskedDebugPayload(0x1F, 0, keys, filtered, baseline, status,
+                                                     0, 0, thresholds, 0, small, sizeof(small)));
+    assert(!firmware_state::encodeMaskedDebugPayload(0, 0, keys, filtered, baseline, status,
+                                                     0, 0, thresholds, 0, small, sizeof(small)));
+  }
+}
+
 static void checkDebugPayloadKeyOrder() {
   bool keys[protocol::KeyCount] = {};
   keys[0] = true;
@@ -580,6 +639,7 @@ int main() {
   checkConfigurationAndState();
   checkDebugPayloadKeyOrder();
   checkDebugPayload();
+  checkMaskedDebugPayload();
   checkTouchStateBoundaries();
 
   config::Config value = config::defaults();
