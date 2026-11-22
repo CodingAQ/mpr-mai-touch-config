@@ -42,6 +42,8 @@ touch/*_touch_touch*.svg
 Thumbs.db
 Desktop.ini
 .DS_Store
+.opencode
+opencode.json
 
 # ---------- Temp Files ----------
 PROTOCOL_ZH.md

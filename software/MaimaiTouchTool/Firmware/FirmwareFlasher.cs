@@ -50,9 +50,31 @@ public sealed class FirmwareFlasher
     /// </summary>
     public int TouchHoldMs { get; init; } = 500;
 
-    /// <summary>找 bossac.exe：先看 PlatformIO 的 packages 目录。</summary>
+    /// <summary>
+    /// 找 bossac.exe：
+    /// 1. 优先随程序分发的 Firmware/ 目录或应用根目录（自包含部署）；
+    /// 2. 开发时从执行目录向上回溯寻找仓库根目录 tools/bossac/bossac.exe；
+    /// 3. 回退 PlatformIO 本地包缓存目录（~/.platformio 或 PLATFORMIO_CORE_DIR）；
+    /// 4. 回退系统 PATH。
+    /// </summary>
     public static string? FindBossac()
     {
+        // 1. 优先随程序分发的 Firmware/ 目录或同目录
+        var shipped = Path.Combine(AppContext.BaseDirectory, "Firmware", "bossac.exe");
+        if (File.Exists(shipped)) return shipped;
+
+        var nextToApp = Path.Combine(AppContext.BaseDirectory, "bossac.exe");
+        if (File.Exists(nextToApp)) return nextToApp;
+
+        // 2. 从执行目录往上找仓库根的 tools/bossac/bossac.exe（支持单元测试与直接调试）
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        for (var i = 0; i < 8 && dir is not null; i++, dir = dir.Parent)
+        {
+            var candidateInRepo = Path.Combine(dir.FullName, "tools", "bossac", "bossac.exe");
+            if (File.Exists(candidateInRepo)) return candidateInRepo;
+        }
+
+        // 3. 回退到 PlatformIO 的 packages 目录
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var candidate = Path.Combine(home, ".platformio", BossacRelativePath);
         if (File.Exists(candidate)) return candidate;
@@ -63,6 +85,32 @@ public sealed class FirmwareFlasher
         {
             var alt = Path.Combine(core, BossacRelativePath);
             if (File.Exists(alt)) return alt;
+        }
+
+        // 4. 回退到系统 PATH
+        var pathCandidate = FindOnSystemPath("bossac.exe");
+        if (pathCandidate is not null) return pathCandidate;
+
+        return null;
+    }
+
+    private static string? FindOnSystemPath(string fileName)
+    {
+        var pathEnv = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrWhiteSpace(pathEnv)) return null;
+
+        var entries = pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var entry in entries)
+        {
+            try
+            {
+                var candidate = Path.Combine(entry, fileName);
+                if (File.Exists(candidate)) return candidate;
+            }
+            catch
+            {
+                // 忽略非法的路径
+            }
         }
         return null;
     }
@@ -85,7 +133,7 @@ public sealed class FirmwareFlasher
 
         var bossac = FindBossac();
         if (bossac is null)
-            return new FlashOutcome(false, "bossac not found; install PlatformIO (pio) first", log.ToString());
+            return new FlashOutcome(false, "bossac not found; please ensure Firmware/bossac.exe exists or install PlatformIO", log.ToString());
 
         Say($"binary : {binaryPath} ({new FileInfo(binaryPath).Length} bytes)");
         Say($"bossac : {bossac}");

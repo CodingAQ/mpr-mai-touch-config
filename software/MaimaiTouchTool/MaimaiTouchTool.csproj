@@ -68,6 +68,17 @@
           Link="Firmware\firmware.bin" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\..\firmware\.pio\build\seeed_xiao\firmware.bin')" />
     <None Include="..\..\firmware\.pio\build\seeed_xiao\firmware.json"
           Link="Firmware\firmware.json" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\..\firmware\.pio\build\seeed_xiao\firmware.json')" />
+
+    <!--
+      自包含的 bossac 烧录工具（从 PlatformIO tool-bossac 打包），
+      随应用分发到 Firmware/bossac.exe，使得固件刷写不依赖外部 PlatformIO 安装。
+    -->
+    <None Include="..\..\tools\bossac\bossac.exe"
+          Link="Firmware\bossac.exe"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest"
+          ExcludeFromSingleFile="true"
+          Condition="Exists('..\..\tools\bossac\bossac.exe')" />
   </ItemGroup>
   <ItemGroup>
     <Compile Update="MainWindow.cs">

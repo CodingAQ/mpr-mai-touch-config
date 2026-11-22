@@ -77,6 +77,10 @@ public sealed class Localizer : INotifyPropertyChanged
         ["App.Subtitle"] = "Configure the applied runtime profile, then explicitly save it to EEPROM and the local mirror.",
         ["DeviceState"] = "DEVICE STATE",
         ["Language"] = "Language",
+        ["Theme"] = "Theme",
+        ["Theme.Dark"] = "Dark",
+        ["Theme.Light"] = "Light",
+        ["Theme.System"] = "Follow system",
         ["Toast.InvalidNumber"] = "Please enter a valid number",
 
         // Tabs
@@ -554,6 +558,10 @@ public sealed class Localizer : INotifyPropertyChanged
         ["App.Subtitle"] = "配置当前应用的运行参数，然后显式保存到 EEPROM 与本地镜像。",
         ["DeviceState"] = "设备状态",
         ["Language"] = "语言",
+        ["Theme"] = "主题",
+        ["Theme.Dark"] = "深色",
+        ["Theme.Light"] = "浅色",
+        ["Theme.System"] = "跟随系统",
         ["Toast.InvalidNumber"] = "请输入有效数字",
 
         ["Tab.Config"] = "配置",
