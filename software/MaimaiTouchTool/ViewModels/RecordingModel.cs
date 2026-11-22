@@ -36,10 +36,13 @@ public sealed class RecordingModel : NotifyModel
     public const int ExtendedSize = 5 + 34 + 5;
 
     private FileStream? stream;
+    // AddFrame 跑在传输后台线程、Stop 跑在 UI 线程：两者都会动 stream/frameCount，必须互斥。
+    private readonly object streamSync = new();
     private long frameCount;
     private DateTimeOffset? startedAt;
     private TimeSpan? finalDuration;
     private bool isRecording;
+    private bool recordingFailed;
     private string filePath = string.Empty;
     private string statusLabel;
 
@@ -88,17 +91,32 @@ public sealed class RecordingModel : NotifyModel
         for (var attempt = 2; File.Exists(path); attempt++)
             path = Path.Combine(directory, $"rec-{DateTimeOffset.Now:yyyyMMdd-HHmmss}-{attempt}.mtr");
 
-        stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
-        var header = new byte[HeaderSize];
-        BinaryPrimitives.WriteUInt32LittleEndian(header, Magic);
-        BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(4), FormatVersion);
-        BinaryPrimitives.WriteInt64LittleEndian(header.AsSpan(8), DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-        configSnapshot.Encode().CopyTo(header, 16);
-        stream.Write(header);
+        // 先写进局部变量：文件头写失败（磁盘满等）时立刻释放，否则 stream 字段已被赋值，
+        // 下次 Start 直接覆盖它、旧句柄再也没人释放。
+        var newStream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
+        try
+        {
+            var header = new byte[HeaderSize];
+            BinaryPrimitives.WriteUInt32LittleEndian(header, Magic);
+            BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(4), FormatVersion);
+            BinaryPrimitives.WriteInt64LittleEndian(header.AsSpan(8), DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            configSnapshot.Encode().CopyTo(header, 16);
+            newStream.Write(header);
+        }
+        catch
+        {
+            newStream.Dispose();
+            throw;
+        }
 
-        frameCount = 0;
-        startedAt = DateTimeOffset.UtcNow;
-        finalDuration = null;
+        lock (streamSync)
+        {
+            stream = newStream;
+            frameCount = 0;
+            startedAt = DateTimeOffset.UtcNow;
+            finalDuration = null;
+            recordingFailed = false;
+        }
         FilePath = path;
         IsRecording = true;
         StatusLabel = Localizer.Instance["Rec.StatusRecording"];
@@ -109,11 +127,39 @@ public sealed class RecordingModel : NotifyModel
     /// <summary>每帧调用；未在录制时是空操作，绝不抛异常（录制故障不能打断遥测流）。</summary>
     public void AddFrame(DebugFrame frame, DateTimeOffset receivedAt)
     {
-        if (!IsRecording || stream is null) return;
+        bool refreshLabels;
         try
         {
+            refreshLabels = WriteRecord(frame, receivedAt);
+        }
+        catch
+        {
+            // 磁盘满 / 文件被占用等：停录保流。状态必须标成失败——显示“已完成”会让用户把不完整的文件当成功。
+            Stop(failed: true);
+            return;
+        }
+        // 刷新节流：遥测满速 ~33 Hz，每 10 帧刷一次 UI 足够，避免刷屏式通知。
+        // AddFrame 在传输后台线程执行，UI 属性通知必须投递回 UI 线程（Avalonia 绑定不允许跨线程写控件）；
+        // 投递放在锁外，免得持锁时 UI 线程上的 Stop 还要多等一轮。
+        if (refreshLabels)
+            Dispatcher.UIThread.Post(() =>
+            {
+                OnPropertyChanged(nameof(FrameCountLabel));
+                OnPropertyChanged(nameof(DurationLabel));
+            });
+    }
+
+    /// <summary>写一条记录。调用方负责异常处理；返回是否需要刷新 UI 上的帧数/时长。</summary>
+    private bool WriteRecord(DebugFrame frame, DateTimeOffset receivedAt)
+    {
+        lock (streamSync)
+        {
+            // 与 Stop 互斥：Stop 会先把 stream 摘成 null 再关闭，所以这里必须在锁内重新判定。
+            var target = stream;
+            if (!IsRecording || target is null) return false;
             var mask = CurrentFieldMask;
-            if (frame.HardwareTouchBits.HasValue) mask |= MaskExtended;
+            // 扩展字段是真·用户开关：关掉时既不请求固件下发，也把意外到达的扩展段丢掉。
+            if (includeExtended && frame.HardwareTouchBits.HasValue) mask |= MaskExtended;
             var size = 1 + 4 + 8;
             if ((mask & MaskTouch) != 0) size += 5;
             if ((mask & MaskFiltered) != 0) size += 96;
@@ -162,36 +208,64 @@ public sealed class RecordingModel : NotifyModel
                 offset += 5;
             }
             BinaryPrimitives.WriteInt64LittleEndian(record.AsSpan(^8..), receivedAt.UtcTicks);
-            stream.Write(record);
+            target.Write(record);
             frameCount++;
-            // 刷新节流：遥测满速 ~33 Hz，每 10 帧刷一次 UI 足够，避免刷屏式通知。
-            // AddFrame 在传输后台线程执行，UI 属性通知必须投递回 UI 线程（Avalonia 绑定不允许跨线程写控件）。
-            if (frameCount % 10 == 0)
-                Dispatcher.UIThread.Post(() =>
-                {
-                    OnPropertyChanged(nameof(FrameCountLabel));
-                    OnPropertyChanged(nameof(DurationLabel));
-                });
-        }
-        catch
-        {
-            // 磁盘满 / 文件被占用等：停录保流，错误状态里能看出帧数不再增长。
-            try { Stop(); } catch { }
+            return frameCount % 10 == 0;
         }
     }
 
-    public void Stop()
+    public void Stop() => Stop(failed: false);
+
+    /// <param name="failed">写盘/刷新出过错，文件可能不完整——状态不能报“已完成”。</param>
+    private void Stop(bool failed)
     {
-        if (!IsRecording) return;
-        IsRecording = false;
-        if (startedAt is { } start) finalDuration = DateTimeOffset.UtcNow - start;
-        stream?.Flush();
-        stream?.Dispose();
-        stream = null;
+        FileStream? closing;
+        lock (streamSync)
+        {
+            if (!IsRecording) return;
+            isRecording = false;      // 直接写字段：由 PublishState 统一在 UI 线程补通知，避免跨线程抛 PropertyChanged
+            closing = stream;
+            stream = null;            // 关键：先摘引用。之后即使 Flush 抛异常，句柄也不会泄漏、也不会被重复关闭
+            if (startedAt is { } start) finalDuration = DateTimeOffset.UtcNow - start;
+            recordingFailed = failed;
+        }
+        // Flush/Dispose 自己也会失败（拔出 U 盘、磁盘写满）：末条记录确实可能不完整，状态要如实反映。
+        try { closing?.Flush(); }
+        catch { recordingFailed = true; }
+        finally { try { closing?.Dispose(); } catch { recordingFailed = true; } }
+
+        PublishState();
+    }
+
+    /// <summary>把状态推给界面。AddFrame 的失败路径在传输线程上调用，必须回到 UI 线程再抛通知。</summary>
+    private void PublishState()
+    {
+        if (Dispatcher.UIThread.CheckAccess()) NotifyState();
+        else Dispatcher.UIThread.Post(NotifyState);
+    }
+
+    private void NotifyState()
+    {
+        OnPropertyChanged(nameof(IsRecording));
         OnPropertyChanged(nameof(FrameCountLabel));
         OnPropertyChanged(nameof(DurationLabel));
         OnPropertyChanged(nameof(HasFilePath));
-        StatusLabel = string.Format(Localizer.Instance["Rec.StatusDone"], frameCount);
+        StatusLabel = BuildStatusLabel();
+    }
+
+    /// <summary>按当前状态重建状态文案。语言切换后必须重新格式化——statusLabel 存的是成品字符串，不是模板。</summary>
+    private string BuildStatusLabel() =>
+        IsRecording ? Localizer.Instance["Rec.StatusRecording"]
+        : recordingFailed ? string.Format(Localizer.Instance["Rec.StatusFailed"], frameCount)
+        : startedAt is not null ? string.Format(Localizer.Instance["Rec.StatusDone"], frameCount)
+        : Localizer.Instance["Rec.StatusIdle"];
+
+    /// <summary>语言切换时由 MainViewModel 调用：重建缓存文案并重抛依赖语言的属性。</summary>
+    public void RaiseLocalized()
+    {
+        StatusLabel = BuildStatusLabel();
+        OnPropertyChanged(nameof(FrameCountLabel));
+        OnPropertyChanged(nameof(DurationLabel));
     }
 
     /// <summary>流结束时由 MainViewModel 调用：静默收尾（没在录就什么都不做）。</summary>
