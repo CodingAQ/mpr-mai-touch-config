@@ -618,7 +618,8 @@
                 <CheckBox Margin="0,0,18,4" IsChecked="{Binding Recording.IncludeFiltered}" Content="{DynamicResource Rec.FieldFiltered}"/>
                 <CheckBox Margin="0,0,18,4" IsChecked="{Binding Recording.IncludeBaseline}" Content="{DynamicResource Rec.FieldBaseline}"/>
                 <CheckBox Margin="0,0,18,4" IsChecked="{Binding Recording.IncludeStatus}" Content="{DynamicResource Rec.FieldStatus}"/>
-                <CheckBox Margin="0,0,0,4" IsChecked="{Binding Recording.IncludeExtended}" Content="{DynamicResource Rec.FieldExtended}"/>
+                <CheckBox Margin="0,0,0,4" IsChecked="{Binding Recording.IncludeExtended}" Content="{DynamicResource Rec.FieldExtended}"
+                          ToolTip.Tip="{DynamicResource Rec.ExtendedHint}"/>
               </WrapPanel>
               <TextBlock FontSize="11" Foreground="#A9B1BA" TextWrapping="Wrap" Text="{DynamicResource Rec.FormatHint}"/>
             </StackPanel>
