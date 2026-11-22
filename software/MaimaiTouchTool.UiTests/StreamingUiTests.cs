@@ -29,6 +29,33 @@ public sealed class StreamingUiTests
     {
         await UiCommandCanStartStopRestartSwitchTabsAndDisconnectWhileStreaming();
         await GuidedCaptureAndDiagnosticsRemainResponsiveAndCollapsedByDefault();
+        await UiThemeSwitchingUpdatesWindowVisualsWithoutExceptions();
+    }
+
+    private static async Task UiThemeSwitchingUpdatesWindowVisualsWithoutExceptions()
+    {
+        await using var vm = new MainViewModel();
+        var window = new MainWindow(vm);
+        window.Show();
+        try
+        {
+            Theming.ThemeManager.Instance.SetTheme("light", persist: false);
+            Dispatcher.UIThread.RunJobs();
+            Assert.True(Theming.ThemeManager.Instance.IsLight);
+
+            Theming.ThemeManager.Instance.SetTheme("dark", persist: false);
+            Dispatcher.UIThread.RunJobs();
+            Assert.False(Theming.ThemeManager.Instance.IsLight);
+
+            Theming.ThemeManager.Instance.SetTheme("system", persist: false);
+            Dispatcher.UIThread.RunJobs();
+            Assert.Equal("system", Theming.ThemeManager.Instance.Theme);
+        }
+        finally
+        {
+            Theming.ThemeManager.Instance.SetTheme("dark", persist: false);
+            window.Close();
+        }
     }
 
     private static async Task UiCommandCanStartStopRestartSwitchTabsAndDisconnectWhileStreaming()

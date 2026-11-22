@@ -1,5 +1,134 @@
-<Application xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="using:MaimaiTouchTool.Touch" x:Class="MaimaiTouchTool.App">
-  <Application.Resources><local:SvgPathConverter x:Key="SvgPathConverter"/><local:ThresholdMarkerConverter x:Key="ThresholdMarkerConverter"/><local:SafeIntConverter x:Key="SafeIntConverter"/></Application.Resources>
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="using:MaimaiTouchTool.Touch"
+             x:Class="MaimaiTouchTool.App">
+  <Application.Resources>
+    <ResourceDictionary>
+      <local:SvgPathConverter x:Key="SvgPathConverter"/>
+      <local:ThresholdMarkerConverter x:Key="ThresholdMarkerConverter"/>
+      <local:SafeIntConverter x:Key="SafeIntConverter"/>
+
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#20252B"/>
+          <SolidColorBrush x:Key="PanelBorderBrush" Color="#3A424B"/>
+          <SolidColorBrush x:Key="SubtleBackgroundBrush" Color="#161A1F"/>
+          <SolidColorBrush x:Key="SubtleBorderBrush" Color="#2C333B"/>
+          <SolidColorBrush x:Key="CodeBackgroundBrush" Color="#14181C"/>
+          <SolidColorBrush x:Key="CodeBorderBrush" Color="#303740"/>
+          <SolidColorBrush x:Key="TouchBoardBackgroundBrush" Color="#090B0D"/>
+          <SolidColorBrush x:Key="TouchBoardBorderBrush" Color="#303740"/>
+          <SolidColorBrush x:Key="ChannelBackgroundBrush" Color="#1A1E23"/>
+          <SolidColorBrush x:Key="ChannelBorderBrush" Color="#39414A"/>
+          <SolidColorBrush x:Key="ChannelTouchedBackgroundBrush" Color="#3A2A1A"/>
+          <SolidColorBrush x:Key="ChannelTouchedBorderBrush" Color="#F59E0B"/>
+          <SolidColorBrush x:Key="TextPrimaryBrush" Color="#F8FAFC"/>
+          <SolidColorBrush x:Key="TextSecondaryBrush" Color="#A9B1BA"/>
+          <SolidColorBrush x:Key="TextMutedBrush" Color="#7F8A95"/>
+          <SolidColorBrush x:Key="IconForegroundBrush" Color="#E6EAF0"/>
+          <SolidColorBrush x:Key="AccentGoldBrush" Color="#D8B46A"/>
+          <SolidColorBrush x:Key="WarningBackgroundBrush" Color="#2A2416"/>
+          <SolidColorBrush x:Key="WarningBorderBrush" Color="#8A6E3A"/>
+          <SolidColorBrush x:Key="WarningTextBrush" Color="#E8CD90"/>
+          <SolidColorBrush x:Key="SuccessTextBrush" Color="#7FC8A0"/>
+          <SolidColorBrush x:Key="SeparatorBrush" Color="#353E4A"/>
+          <SolidColorBrush x:Key="ToastBackgroundBrush" Color="#303740"/>
+          <SolidColorBrush x:Key="ToastBorderBrush" Color="#D65A3A"/>
+          <SolidColorBrush x:Key="CalibrateActiveBackgroundBrush" Color="#2A1A1A"/>
+          <SolidColorBrush x:Key="FrameRateTextBrush" Color="#F59E0B"/>
+          <SolidColorBrush x:Key="SensSwatch1Brush" Color="#2A7E7D"/>
+          <SolidColorBrush x:Key="SensSwatch2Brush" Color="#1E5A63"/>
+          <SolidColorBrush x:Key="SensSwatch3Brush" Color="#3A424B"/>
+          <SolidColorBrush x:Key="SensSwatch4Brush" Color="#9E5A32"/>
+          <SolidColorBrush x:Key="SensSwatch5Brush" Color="#E0703A"/>
+          <SolidColorBrush x:Key="ChartFilteredBrush" Color="#60A5FA"/>
+          <SolidColorBrush x:Key="ChartBaselineBrush" Color="#4ADE80"/>
+          <SolidColorBrush x:Key="ChartDropBrush" Color="#FBBF24"/>
+          <SolidColorBrush x:Key="ChartTouchBrush" Color="#FB7185"/>
+          <SolidColorBrush x:Key="ChartReleaseBrush" Color="#C084FC"/>
+          <SolidColorBrush x:Key="ChartOutputBrush" Color="#22D3EE"/>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Light">
+          <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="PanelBorderBrush" Color="#E2E8F0"/>
+          <SolidColorBrush x:Key="SubtleBackgroundBrush" Color="#F8FAFC"/>
+          <SolidColorBrush x:Key="SubtleBorderBrush" Color="#E2E8F0"/>
+          <SolidColorBrush x:Key="CodeBackgroundBrush" Color="#F1F5F9"/>
+          <SolidColorBrush x:Key="CodeBorderBrush" Color="#CBD5E1"/>
+          <SolidColorBrush x:Key="TouchBoardBackgroundBrush" Color="#F1F5F9"/>
+          <SolidColorBrush x:Key="TouchBoardBorderBrush" Color="#CBD5E1"/>
+          <SolidColorBrush x:Key="ChannelBackgroundBrush" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="ChannelBorderBrush" Color="#CBD5E1"/>
+          <SolidColorBrush x:Key="ChannelTouchedBackgroundBrush" Color="#FEF3C7"/>
+          <SolidColorBrush x:Key="ChannelTouchedBorderBrush" Color="#D97706"/>
+          <SolidColorBrush x:Key="TextPrimaryBrush" Color="#0F172A"/>
+          <SolidColorBrush x:Key="TextSecondaryBrush" Color="#475569"/>
+          <SolidColorBrush x:Key="TextMutedBrush" Color="#64748B"/>
+          <SolidColorBrush x:Key="IconForegroundBrush" Color="#334155"/>
+          <SolidColorBrush x:Key="AccentGoldBrush" Color="#B45309"/>
+          <SolidColorBrush x:Key="WarningBackgroundBrush" Color="#FFFBEB"/>
+          <SolidColorBrush x:Key="WarningBorderBrush" Color="#FDE68A"/>
+          <SolidColorBrush x:Key="WarningTextBrush" Color="#92400E"/>
+          <SolidColorBrush x:Key="SuccessTextBrush" Color="#15803D"/>
+          <SolidColorBrush x:Key="SeparatorBrush" Color="#E2E8F0"/>
+          <SolidColorBrush x:Key="ToastBackgroundBrush" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="ToastBorderBrush" Color="#D65A3A"/>
+          <SolidColorBrush x:Key="CalibrateActiveBackgroundBrush" Color="#FEF2F2"/>
+          <SolidColorBrush x:Key="FrameRateTextBrush" Color="#D97706"/>
+          <SolidColorBrush x:Key="SensSwatch1Brush" Color="#0D9488"/>
+          <SolidColorBrush x:Key="SensSwatch2Brush" Color="#5EEAD4"/>
+          <SolidColorBrush x:Key="SensSwatch3Brush" Color="#CBD5E1"/>
+          <SolidColorBrush x:Key="SensSwatch4Brush" Color="#FDBA74"/>
+          <SolidColorBrush x:Key="SensSwatch5Brush" Color="#EA580C"/>
+          <SolidColorBrush x:Key="ChartFilteredBrush" Color="#2563EB"/>
+          <SolidColorBrush x:Key="ChartBaselineBrush" Color="#16A34A"/>
+          <SolidColorBrush x:Key="ChartDropBrush" Color="#D97706"/>
+          <SolidColorBrush x:Key="ChartTouchBrush" Color="#E11D48"/>
+          <SolidColorBrush x:Key="ChartReleaseBrush" Color="#9333EA"/>
+          <SolidColorBrush x:Key="ChartOutputBrush" Color="#0891B2"/>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Default">
+          <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#20252B"/>
+          <SolidColorBrush x:Key="PanelBorderBrush" Color="#3A424B"/>
+          <SolidColorBrush x:Key="SubtleBackgroundBrush" Color="#161A1F"/>
+          <SolidColorBrush x:Key="SubtleBorderBrush" Color="#2C333B"/>
+          <SolidColorBrush x:Key="CodeBackgroundBrush" Color="#14181C"/>
+          <SolidColorBrush x:Key="CodeBorderBrush" Color="#303740"/>
+          <SolidColorBrush x:Key="TouchBoardBackgroundBrush" Color="#090B0D"/>
+          <SolidColorBrush x:Key="TouchBoardBorderBrush" Color="#303740"/>
+          <SolidColorBrush x:Key="ChannelBackgroundBrush" Color="#1A1E23"/>
+          <SolidColorBrush x:Key="ChannelBorderBrush" Color="#39414A"/>
+          <SolidColorBrush x:Key="ChannelTouchedBackgroundBrush" Color="#3A2A1A"/>
+          <SolidColorBrush x:Key="ChannelTouchedBorderBrush" Color="#F59E0B"/>
+          <SolidColorBrush x:Key="TextPrimaryBrush" Color="#F8FAFC"/>
+          <SolidColorBrush x:Key="TextSecondaryBrush" Color="#A9B1BA"/>
+          <SolidColorBrush x:Key="TextMutedBrush" Color="#7F8A95"/>
+          <SolidColorBrush x:Key="IconForegroundBrush" Color="#E6EAF0"/>
+          <SolidColorBrush x:Key="AccentGoldBrush" Color="#D8B46A"/>
+          <SolidColorBrush x:Key="WarningBackgroundBrush" Color="#2A2416"/>
+          <SolidColorBrush x:Key="WarningBorderBrush" Color="#8A6E3A"/>
+          <SolidColorBrush x:Key="WarningTextBrush" Color="#E8CD90"/>
+          <SolidColorBrush x:Key="SuccessTextBrush" Color="#7FC8A0"/>
+          <SolidColorBrush x:Key="SeparatorBrush" Color="#353E4A"/>
+          <SolidColorBrush x:Key="ToastBackgroundBrush" Color="#303740"/>
+          <SolidColorBrush x:Key="ToastBorderBrush" Color="#D65A3A"/>
+          <SolidColorBrush x:Key="CalibrateActiveBackgroundBrush" Color="#2A1A1A"/>
+          <SolidColorBrush x:Key="FrameRateTextBrush" Color="#F59E0B"/>
+          <SolidColorBrush x:Key="SensSwatch1Brush" Color="#2A7E7D"/>
+          <SolidColorBrush x:Key="SensSwatch2Brush" Color="#1E5A63"/>
+          <SolidColorBrush x:Key="SensSwatch3Brush" Color="#3A424B"/>
+          <SolidColorBrush x:Key="SensSwatch4Brush" Color="#9E5A32"/>
+          <SolidColorBrush x:Key="SensSwatch5Brush" Color="#E0703A"/>
+          <SolidColorBrush x:Key="ChartFilteredBrush" Color="#60A5FA"/>
+          <SolidColorBrush x:Key="ChartBaselineBrush" Color="#4ADE80"/>
+          <SolidColorBrush x:Key="ChartDropBrush" Color="#FBBF24"/>
+          <SolidColorBrush x:Key="ChartTouchBrush" Color="#FB7185"/>
+          <SolidColorBrush x:Key="ChartReleaseBrush" Color="#C084FC"/>
+          <SolidColorBrush x:Key="ChartOutputBrush" Color="#22D3EE"/>
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+    </ResourceDictionary>
+  </Application.Resources>
   <Application.Styles>
     <FluentTheme />
   </Application.Styles>

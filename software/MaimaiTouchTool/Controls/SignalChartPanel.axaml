@@ -3,7 +3,7 @@
              x:Class="MaimaiTouchTool.Controls.SignalChartPanel" x:CompileBindings="False">
   <StackPanel Spacing="8">
     <TextBlock FontWeight="SemiBold" Text="{DynamicResource Chart.Title}"/>
-    <TextBlock FontSize="11" Foreground="#A9B1BA" Text="{DynamicResource Chart.Hint}" TextWrapping="Wrap"/>
+    <TextBlock FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" Text="{DynamicResource Chart.Hint}" TextWrapping="Wrap"/>
     <WrapPanel>
       <TextBlock VerticalAlignment="Center" Margin="0,0,8,0" Text="{DynamicResource Chart.Key}"/>
       <ComboBox Width="90" Margin="0,0,12,0" ItemsSource="{Binding Keys}" SelectedIndex="{Binding SelectedKeyIndex, Mode=TwoWay}"/>
@@ -12,15 +12,15 @@
       <Button Command="{Binding ClearCommand}" Content="{DynamicResource Chart.Clear}"/>
     </WrapPanel>
     <WrapPanel>
-      <TextBlock Foreground="#60A5FA" Margin="0,0,12,0" Text="{DynamicResource Chart.Filtered}"/>
-      <TextBlock Foreground="#4ADE80" Margin="0,0,12,0" Text="{DynamicResource Chart.Baseline}"/>
-      <TextBlock Foreground="#FBBF24" Margin="0,0,12,0" Text="{DynamicResource Chart.Drop}"/>
-      <TextBlock Foreground="#FB7185" Margin="0,0,12,0" Text="{DynamicResource Chart.TouchThreshold}"/>
-      <TextBlock Foreground="#C084FC" Margin="0,0,12,0" Text="{DynamicResource Chart.ReleaseThreshold}"/>
-      <TextBlock Foreground="#FB7185" Text="{DynamicResource Chart.TouchBand}"/>
-      <TextBlock Foreground="#22D3EE" Margin="12,0,0,0" Text="{DynamicResource Compensation.ChartLegend}"/>
+      <TextBlock Foreground="{DynamicResource ChartFilteredBrush}" Margin="0,0,12,0" Text="{DynamicResource Chart.Filtered}"/>
+      <TextBlock Foreground="{DynamicResource ChartBaselineBrush}" Margin="0,0,12,0" Text="{DynamicResource Chart.Baseline}"/>
+      <TextBlock Foreground="{DynamicResource ChartDropBrush}" Margin="0,0,12,0" Text="{DynamicResource Chart.Drop}"/>
+      <TextBlock Foreground="{DynamicResource ChartTouchBrush}" Margin="0,0,12,0" Text="{DynamicResource Chart.TouchThreshold}"/>
+      <TextBlock Foreground="{DynamicResource ChartReleaseBrush}" Margin="0,0,12,0" Text="{DynamicResource Chart.ReleaseThreshold}"/>
+      <TextBlock Foreground="{DynamicResource ChartTouchBrush}" Text="{DynamicResource Chart.TouchBand}"/>
+      <TextBlock Foreground="{DynamicResource ChartOutputBrush}" Margin="12,0,0,0" Text="{DynamicResource Compensation.ChartLegend}"/>
     </WrapPanel>
     <controls:SignalChart Model="{Binding}" Height="300" ClipToBounds="True"/>
-    <TextBlock Text="{Binding CurrentValues}" TextWrapping="Wrap" FontSize="11" Foreground="#A9B1BA"/>
+    <TextBlock Text="{Binding CurrentValues}" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}"/>
   </StackPanel>
 </UserControl>
