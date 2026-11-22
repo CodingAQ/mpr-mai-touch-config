@@ -130,6 +130,9 @@ jobs:
             if (-not (Test-Path "$dir/Firmware/firmware.json")) {
               throw "Firmware manifest was not included in $dir"
             }
+            if (-not (Test-Path "$dir/Firmware/bossac.exe")) {
+              throw "bossac executable was not included in $dir"
+            }
           }
           Compress-Archive -Path 'artifacts/tool-framework-dependent/*' -DestinationPath 'artifacts/MaimaiTouchTool-win-x64.zip' -Force
           Compress-Archive -Path 'artifacts/tool-self-contained/*' -DestinationPath 'artifacts/MaimaiTouchTool-win-x64-selfcontained.zip' -Force

@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using MaimaiTouchTool.Localization;
 using MaimaiTouchTool.Protocol;
+using MaimaiTouchTool.Theming;
 
 namespace MaimaiTouchTool.ViewModels;
 
@@ -66,6 +67,7 @@ public sealed class ElectrodeEditorModel : NotifyModel
         IncreaseCommand = new RelayCommand(() => Nudge(this.stepProvider()));
         DecreaseCommand = new RelayCommand(() => Nudge(-this.stepProvider()));
         Localizer.Instance.LanguageChanged += (_, _) => OnPropertyChanged(nameof(SensitivityLabel));
+        ThemeManager.Instance.ThemeChanged += (_, _) => OnPropertyChanged(nameof(TintBrush));
     }
     public int Index { get; }
     public string Label { get; }
@@ -99,10 +101,10 @@ public sealed class ElectrodeEditorModel : NotifyModel
 
     /// <summary>图例染色：负值偏蓝绿，0 中性，正值偏橙红。越偏离 0 越深。</summary>
     public string TintBrush => Offset == 0
-        ? "#1A1E24"
+        ? (ThemeManager.Instance.IsLight ? "#F1F5F9" : "#1A1E24")
         : Offset < 0
-            ? Interpolate("#1E5A63", "#39B0A6", Math.Min(1.0, -Offset / 16.0))
-            : Interpolate("#6B3A1E", "#E0703A", Math.Min(1.0, Offset / 16.0));
+            ? Interpolate(ThemeManager.Instance.IsLight ? "#CCFBF1" : "#1E5A63", ThemeManager.Instance.IsLight ? "#0D9488" : "#39B0A6", Math.Min(1.0, -Offset / 16.0))
+            : Interpolate(ThemeManager.Instance.IsLight ? "#FFEDD5" : "#6B3A1E", ThemeManager.Instance.IsLight ? "#EA580C" : "#E0703A", Math.Min(1.0, Offset / 16.0));
 
     public string Tooltip => $"{Label}  ({HardwareHint})\n{SensitivityLabel}  ·  offset {Offset:+0;-0;0}";
 
