@@ -83,7 +83,12 @@ bool encodeMaskedDebugPayload(uint8_t fieldMask, uint32_t timestampMs, const boo
                               const uint8_t status[touchmap::BoardCount], uint16_t i2cErrors,
                               uint64_t hwTouchBits, const uint8_t thresholds[touchmap::KeyCount],
                               uint64_t activeBits, uint8_t* payload, uint16_t payloadCapacity) {
-  if (fieldMask == 0 || keys == nullptr || filtered == nullptr || baseline == nullptr ||
+  // 0x1F 之外的位没有定义，一律拒编：产出一帧违反 §5.6 字段掩码规则的负载，
+  // 比直接失败更难查——读方会按自己理解的布局解析出一堆错位数据。
+  constexpr uint8_t KnownFieldMask = FieldMaskTouch | FieldMaskFiltered | FieldMaskBaseline |
+                                     FieldMaskStatus | FieldMaskExtended;
+  if (fieldMask == 0 || (fieldMask & ~KnownFieldMask) != 0 ||
+      keys == nullptr || filtered == nullptr || baseline == nullptr ||
       status == nullptr || thresholds == nullptr || payload == nullptr ||
       payloadCapacity < maskedDebugPayloadSize(fieldMask)) {
     return false;

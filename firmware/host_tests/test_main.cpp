@@ -411,13 +411,20 @@ static void checkMaskedDebugPayload() {
     assert(payload[199] == 2 && payload[203] == 0x40);  // active bits 低 5B
   }
 
-  // 容量不足 / 空 mask 拒绝
+  // 容量不足 / 空 mask / 含保留位 一律拒绝
   {
     uint8_t small[10] = {};
     assert(!firmware_state::encodeMaskedDebugPayload(0x1F, 0, keys, filtered, baseline, status,
                                                      0, 0, thresholds, 0, small, sizeof(small)));
     assert(!firmware_state::encodeMaskedDebugPayload(0, 0, keys, filtered, baseline, status,
                                                      0, 0, thresholds, 0, small, sizeof(small)));
+    // 0x1F 之外的位没有定义：宁可拒编，也不要产出一帧读方无法解析的负载
+    uint8_t full[firmware_state::MaxMaskedDebugPayloadLength] = {};
+    assert(!firmware_state::encodeMaskedDebugPayload(0x1F | 0x20, 0, keys, filtered, baseline,
+                                                     status, 0, 0, thresholds, 0, full,
+                                                     sizeof(full)));
+    assert(!firmware_state::encodeMaskedDebugPayload(0x80, 0, keys, filtered, baseline, status,
+                                                     0, 0, thresholds, 0, full, sizeof(full)));
   }
 }
 

@@ -51,7 +51,8 @@ bool isKnownRequestType(uint8_t type) {
     case TypeCalibrate:
     case TypeStreamStart:
     case TypeStreamStop:
-    case TypeDebugFrameMasked:
+      // 注意：TypeDebugFrameMasked 是固件下行的事件类型，不是请求，不要登记在这里——
+      // 登记后误发的 0x91 会通过合法性校验再落到未知请求分支，语义是错的。
       return true;
     default:
       return false;
