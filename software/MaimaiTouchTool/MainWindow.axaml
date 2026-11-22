@@ -446,10 +446,6 @@
                 </StackPanel>
               </StackPanel>
 
-              <Expander Header="{DynamicResource Chart.Title}" IsExpanded="True">
-                <controls:SignalChartPanel DataContext="{Binding SignalChart}"/>
-              </Expander>
-
               <StackPanel Spacing="10" IsVisible="{Binding HasGuidedResult}">
                 <TextBlock Text="{Binding GuidedHeadline}" TextWrapping="Wrap"/>
                 <TextBlock Foreground="#D8B46A" Text="{Binding GuidedVerificationLabel}" TextWrapping="Wrap"/>
