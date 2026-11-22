@@ -40,3 +40,4 @@ touch/*_touch_touch*.svg
 Thumbs.db
 Desktop.ini
 .DS_Store
+.opencode
