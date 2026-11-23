@@ -75,8 +75,19 @@ public sealed partial class MainViewModel : NotifyModel, IAsyncDisposable
     private string? mappingHeadline;
     private readonly MappingHistory mappingHistory = new();
     private bool replayingHistory;
+    // 设备是否支持掩码遥测（VERSION 能力位 bit6，连接时记录）。false 时开流退回旧 2B 请求。
+    private bool supportsMaskedStream;
+    // 回报率测试：被动数帧（流正常跑就行），固定窗口 5 秒。
+    private bool rateTestActive;
+    private long rateTestFrames;
+    // 速率用首末帧时刻算，不用固定窗口：流中途被停掉时窗口法会拿部分帧数除以完整 5 秒，结果偏低。
+    private long rateTestFirstTicks;
+    private long rateTestLastTicks;
+    private string rateTestResult = string.Empty;
     public TelemetrySessionModel Telemetry { get; } = new();
     public SignalChartModel SignalChart { get; } = new();
+    /// <summary>调试流录制器：录制页用它把每一帧调试数据落盘。</summary>
+    public RecordingModel Recording { get; } = new();
     public McpGuideModel McpGuide { get; } = new();
     /// <summary>固件版本页：工具/设备/待刷/远端四条版本，以及一键刷写。</summary>
     public FirmwareViewModel FirmwareInfo { get; } = new();
@@ -117,6 +128,19 @@ public sealed partial class MainViewModel : NotifyModel, IAsyncDisposable
     public ICommand RefreshFirmwareCommand { get; }
     /// <summary>把本地 firmware.bin 刷进板子（必要时先断开串口）。</summary>
     public ICommand FlashFirmwareCommand { get; }
+    public ICommand StartRecordingCommand { get; }
+    public ICommand StopRecordingCommand { get; }
+    public ICommand OpenRecordingFolderCommand { get; }
+    public ICommand RateTestCommand { get; }
+
+    /// <summary>回报率测试的最近一次结果（运行中显示"测量中…"）。</summary>
+    public string RateTestResult
+    {
+        get => rateTestResult;
+        private set { rateTestResult = value; OnPropertyChanged(); OnPropertyChanged(nameof(HasRateTestResult)); }
+    }
+    public bool HasRateTestResult => !string.IsNullOrEmpty(rateTestResult);
+    public bool IsRateTesting => rateTestActive;
 
     public MainViewModel(Func<string, (SerialTransport Transport, IRequestClient Client)>? transportFactory = null)
     {
@@ -147,6 +171,14 @@ public sealed partial class MainViewModel : NotifyModel, IAsyncDisposable
         ToggleMcpServeCommand = new AsyncCommand(ToggleMcpServeAsync);
         RefreshFirmwareCommand = new AsyncCommand(RefreshFirmwareAsync);
         FlashFirmwareCommand = new AsyncCommand(FlashFirmwareAsync, () => FirmwareInfo.CanFlash && !IsGuidedLocked);
+        StartRecordingCommand = new AsyncCommand(StartRecordingAsync, () => IsConnected && !IsBusy && !IsGuidedLocked && !IsMappingRunning && !IsGameMode && !Recording.IsRecording);
+        StopRecordingCommand = new AsyncCommand(() => { StopRecording(); return Task.CompletedTask; }, () => Recording.IsRecording);
+        OpenRecordingFolderCommand = new AsyncCommand(() => { Recording.OpenFolder(); return Task.CompletedTask; });
+        // 守卫必须和 StartStreamCommand/StartRecordingCommand 对齐：映射学习与引导校准各有一条自己的数据流，
+        // 都不会设置 streamCancellation，也不经过 RunDebugStreamAsync 的计数回调。只查 !rateTestActive 时，
+        // 在那些阶段点“测回报率”会再开一条流抢同一个串口，且计数恒为 0。录制中同样禁用：写盘 IO 会拉低实测值。
+        RateTestCommand = new AsyncCommand(StartRateTestAsync, () =>
+            IsConnected && !IsBusy && !rateTestActive && !IsGuidedLocked && !IsMappingRunning && !IsGameMode && !Recording.IsRecording);
         StepUpCommand = new RelayCommand(() => Editor.CycleStep(1));
         StepDownCommand = new RelayCommand(() => Editor.CycleStep(-1));
         StartGuidedCommand = new AsyncCommand(StartGuidedAsync, () => CanStartGuided && guidedResult is null);
@@ -182,6 +214,11 @@ public sealed partial class MainViewModel : NotifyModel, IAsyncDisposable
         OnPropertyChanged(nameof(GuidedLiveDepthLabel));
         OnPropertyChanged(nameof(GuidedVerificationLabel));
         SignalChart.RaiseLocalized();
+        // 必须让 RecordingModel 自己重抛：绑定 Recording.StatusLabel 是订阅子对象的 PropertyChanged，
+        // 在父 VM 上抛 "Recording.StatusLabel" 这个名字没有任何监听者（界面上会残留旧语言文案）。
+        // 而且它的状态文案是缓存的成品字符串，还得按当前状态重新格式化，光抛通知不够。
+        Recording.RaiseLocalized();
+        OnPropertyChanged(nameof(RateTestResult));
         foreach (var board in GuidedBoardChoices) board.RaiseLocalized();
         OnPropertyChanged(nameof(MappingLiveDepthLabel));
         OnPropertyChanged(nameof(McpServeLabel));
@@ -440,6 +477,7 @@ public sealed partial class MainViewModel : NotifyModel, IAsyncDisposable
             FirmwareInfo.HasKeyMappingCapability = (capabilities & ProtocolConstants.CapabilityKeyMapping) != 0;
             workflow.SupportsCompensation = (capabilities & ProtocolConstants.CapabilityCompensation) != 0;
             Editor.SupportsCompensation = workflow.SupportsCompensation;
+            supportsMaskedStream = (capabilities & ProtocolConstants.CapabilityMaskedStream) != 0;
             if ((capabilities & ProtocolConstants.CapabilityKeyMapping) == 0) throw new NotSupportedException(Localizer.Instance["Msg.FirmwareTooOld"]);
             await EnterConfigAsync(token);
             var deviceConfig = await ReadConfigWithRecoveryAsync(token);
@@ -792,7 +830,7 @@ public sealed partial class MainViewModel : NotifyModel, IAsyncDisposable
         OnPropertyChanged(nameof(IsGameMode));
         OnPropertyChanged(nameof(IsGameModeActive));
         OnPropertyChanged(nameof(CanToggleGameMode));
-        foreach (var command in new[] { RefreshPortsCommand, ConnectCommand, DisconnectCommand, CancelConnectCommand, ApplyCommand, SaveCommand, ReadbackCommand, RestoreDefaultsCommand, UseDeviceCommand, UseLocalCommand, CalibrateCommand, CancelCalibrationCommand, StartStreamCommand, StopStreamCommand, GameModeCommand, StopGameModeCommand, StartGuidedCommand, SkipGuidedKeyCommand, FinishGuidedKeyCommand, CancelGuidedCommand, ApplyGuidedResultCommand, DiscardGuidedResultCommand, VerifyGuidedCommand, RetryGuidedCommand, StartMappingCommand, SkipMappingKeyCommand, FinishMappingKeyCommand, CancelMappingCommand, UndoMappingCommand, RedoMappingCommand, FillBoardsCommand, RollbackMappingCommand, ToggleMcpServeCommand, FlashFirmwareCommand })
+        foreach (var command in new[] { RefreshPortsCommand, ConnectCommand, DisconnectCommand, CancelConnectCommand, ApplyCommand, SaveCommand, ReadbackCommand, RestoreDefaultsCommand, UseDeviceCommand, UseLocalCommand, CalibrateCommand, CancelCalibrationCommand, StartStreamCommand, StopStreamCommand, GameModeCommand, StopGameModeCommand, StartGuidedCommand, SkipGuidedKeyCommand, FinishGuidedKeyCommand, CancelGuidedCommand, ApplyGuidedResultCommand, DiscardGuidedResultCommand, VerifyGuidedCommand, RetryGuidedCommand, StartMappingCommand, SkipMappingKeyCommand, FinishMappingKeyCommand, CancelMappingCommand, UndoMappingCommand, RedoMappingCommand, FillBoardsCommand, RollbackMappingCommand, ToggleMcpServeCommand, FlashFirmwareCommand, StartRecordingCommand, StopRecordingCommand, OpenRecordingFolderCommand, RateTestCommand })
         {
             if (command is AsyncCommand asyncCommand) asyncCommand.Refresh();
             else if (command is RelayCommand relayCommand) relayCommand.Refresh();
@@ -918,8 +956,30 @@ public sealed partial class MainViewModel : NotifyModel, IAsyncDisposable
         SignalChart.Clear();
         try
         {
+            // 掩码遥测（协议 1.3）：固件支持时按需下发掩码——固件跳过被掩字段的 I2C 采样并只发请求的字段，
+            // 帧变小（跨更少 USB bank），回报率随之提升。
+            // 掩码里 touch/filtered/baseline/status 恒开：信号曲线页与校准向导共用这路流，
+            // 缺任一字段会导致 valid 判定失败（曲线断成散点、报"最新样本无效"）。
+            // 可调的只有 extended（44B，关掉即可拿到大部分回报率收益）；录制页五个开关只控制 .mtr 落盘内容。
+            byte? fieldMask = null;
+            if (supportsMaskedStream)
+            {
+                var mask = (byte)(ProtocolConstants.FieldMaskTouch | ProtocolConstants.FieldMaskFiltered
+                    | ProtocolConstants.FieldMaskBaseline | ProtocolConstants.FieldMaskStatus);
+                if (Recording.IncludeExtended) mask |= ProtocolConstants.FieldMaskExtended;
+                fieldMask = mask;
+            }
             await transport.StreamDebugEventsAwaitedAsync(ProtocolConstants.DefaultStreamRateHz, async sample =>
             {
+                // 录制落盘与回报率计数都留在后台线程（回调本身被 await 串行化，磁盘 IO 不会挤占 UI 线程）。
+                Recording.AddFrame(sample.Frame, sample.ReceivedAt);
+                if (rateTestActive)
+                {
+                    Interlocked.Increment(ref rateTestFrames);
+                    var ticks = sample.ReceivedAt.UtcTicks;
+                    if (Interlocked.Read(ref rateTestFirstTicks) == 0) Interlocked.Exchange(ref rateTestFirstTicks, ticks);
+                    Interlocked.Exchange(ref rateTestLastTicks, ticks);
+                }
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
                     if (source.IsCancellationRequested) return;
@@ -928,7 +988,8 @@ public sealed partial class MainViewModel : NotifyModel, IAsyncDisposable
                     for (var i = 0; i < TouchKeys.Count; i++) TouchKeys[i].IsPressed = (sample.Frame.TouchBits & (1UL << i)) != 0;
                 }, DispatcherPriority.Background);
             }, async error => await Dispatcher.UIThread.InvokeAsync(() => Telemetry.MarkMalformed(Localizer.Instance["Msg.MalformedFrame"] + error.Message)), source.Token,
-                async info => await Dispatcher.UIThread.InvokeAsync(() => Telemetry.SetAcceptedRate(info.AcceptedRateHz, info.ActualRateHz)));
+                async info => await Dispatcher.UIThread.InvokeAsync(() => Telemetry.SetAcceptedRate(info.AcceptedRateHz, info.ActualRateHz)),
+                fieldMask, ProtocolConstants.AllChannelsMask);
             Telemetry.Stop();
         }
         catch (OperationCanceledException) { Telemetry.Stop(); }
@@ -938,8 +999,64 @@ public sealed partial class MainViewModel : NotifyModel, IAsyncDisposable
         {
             if (ReferenceEquals(streamCancellation, source)) streamCancellation = null;
             foreach (var key in TouchKeys) key.IsPressed = false;
+            Recording.StopIfRecording();
             RefreshCommands();
         }
+    }
+
+    // ---- 录制页：把调试流落盘。流没开时开始录制会顺带把流拉起来 ----
+    private async Task StartRecordingAsync()
+    {
+        if (transport is null) { StatusMessage = Localizer.Instance["Msg.StreamUnavailable"]; return; }
+        // 先开文件、后拉流：文件打不开（安装目录只读、磁盘满）时不该留下一条空跑的遥测流——
+        // 原顺序是拉流在前，Start 抛异常只设了消息，流会一直跑到用户手动停。
+        try { Recording.Start(applied); }
+        catch (Exception ex)
+        {
+            StatusMessage = Localizer.Instance["Rec.SaveFailed"] + UserMessage(ex);
+            RefreshCommands();
+            return;
+        }
+        if (streamCancellation is null)
+        {
+            // StartStreamAsync 会一直运行到流被停止，这里只负责启动它，不等待。
+            _ = StartStreamAsync();
+        }
+        RefreshCommands();
+        StatusMessage = Localizer.Instance["Rec.Started"];
+        await Task.CompletedTask;
+    }
+    private void StopRecording()
+    {
+        Recording.Stop();
+        StatusMessage = Localizer.Instance["Rec.Stopped"];
+        RefreshCommands();
+    }
+
+    // ---- 回报率测试：5 秒固定窗口被动数帧；流没开就先拉起来 ----
+    private async Task StartRateTestAsync()
+    {
+        if (transport is null) { StatusMessage = Localizer.Instance["Msg.StreamUnavailable"]; return; }
+        if (streamCancellation is null) { _ = StartStreamAsync(); RefreshCommands(); }
+        rateTestActive = true;
+        Interlocked.Exchange(ref rateTestFrames, 0);
+        Interlocked.Exchange(ref rateTestFirstTicks, 0);
+        Interlocked.Exchange(ref rateTestLastTicks, 0);
+        RateTestResult = Localizer.Instance["Rec.RateTestRunning"];
+        RefreshCommands();
+        try
+        {
+            await Task.Delay(5000);
+            var frames = Interlocked.Read(ref rateTestFrames);
+            var first = Interlocked.Read(ref rateTestFirstTicks);
+            var last = Interlocked.Read(ref rateTestLastTicks);
+            // 用首末帧的真实时间跨度，而不是固定 5 秒窗口：中途停流/掉线时窗口法会把部分帧数
+            // 摊到完整 5 秒上，测出来的速率明显偏低；顺带也消掉了启动瞬间几帧的偏差。
+            var seconds = frames > 1 && last > first ? (last - first) / (double)TimeSpan.TicksPerSecond : 0;
+            RateTestResult = string.Format(Localizer.Instance["Rec.RateTestResult"],
+                seconds > 0 ? (frames - 1) / seconds : 0, frames, seconds);
+        }
+        finally { rateTestActive = false; RefreshCommands(); }
     }
 
     // 底层传输已断开时同步 UI 状态，避免“左上角仍显示已连接、但端口其实已死”的状态不一致。
@@ -947,6 +1064,7 @@ public sealed partial class MainViewModel : NotifyModel, IAsyncDisposable
     {
         if (transport is not null && transport.State != TransportState.Disconnected) return; // 明确的超时/拒绝不算断开
         await DisconnectTransportAsync();
+
         Status = ConnectionStatus.Disconnected;
     }
     private async Task StopStreamAsync()

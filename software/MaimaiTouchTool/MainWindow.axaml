@@ -20,6 +20,8 @@
     <Style Selector="Button.mini"><Setter Property="MinWidth" Value="24"/><Setter Property="Width" Value="24"/><Setter Property="Height" Value="26"/><Setter Property="Padding" Value="0"/><Setter Property="HorizontalContentAlignment" Value="Center"/><Setter Property="VerticalContentAlignment" Value="Center"/></Style>
     <Style Selector="Button.mini PathIcon"><Setter Property="Width" Value="12"/><Setter Property="Height" Value="12"/><Setter Property="Foreground" Value="{DynamicResource IconForegroundBrush}"/></Style>
     <Style Selector="Button.mini-wide"><Setter Property="Height" Value="26"/><Setter Property="Padding" Value="8,0"/><Setter Property="FontSize" Value="11"/><Setter Property="HorizontalContentAlignment" Value="Center"/><Setter Property="VerticalContentAlignment" Value="Center"/></Style>
+    <Style Selector="TextBlock.rec-status"><Setter Property="FontSize" Value="18"/><Setter Property="FontWeight" Value="SemiBold"/><Setter Property="Foreground" Value="#E6EAF0"/></Style>
+    <Style Selector="TextBlock.rec-status.recording"><Setter Property="Foreground" Value="#F59E0B"/></Style>
   </Window.Styles>
   <Grid RowDefinitions="Auto,*,Auto" Margin="24">
     <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,0,0,18">
@@ -453,6 +455,10 @@
                 </StackPanel>
               </StackPanel>
 
+              <Expander Header="{DynamicResource Chart.Title}" IsExpanded="True">
+                <controls:SignalChartPanel DataContext="{Binding SignalChart}"/>
+              </Expander>
+
               <StackPanel Spacing="10" IsVisible="{Binding HasGuidedResult}">
                 <TextBlock Text="{Binding GuidedHeadline}" TextWrapping="Wrap"/>
                 <TextBlock Foreground="{DynamicResource AccentGoldBrush}" Text="{Binding GuidedVerificationLabel}" TextWrapping="Wrap"/>
@@ -573,6 +579,71 @@
             <Grid RowDefinitions="Auto,*"><TextBlock FontWeight="SemiBold" Text="{DynamicResource Tele.EventLog}"/><ScrollViewer Grid.Row="1" Height="96" VerticalScrollBarVisibility="Auto"><ItemsControl ItemsSource="{Binding Telemetry.Log}"><ItemsControl.ItemTemplate><DataTemplate><TextBlock FontSize="11" TextWrapping="Wrap" Text="{Binding Timestamp, StringFormat={}{0:HH:mm:ss.fff}}  [{Binding Level}] {Binding Message}"/></DataTemplate></ItemsControl.ItemTemplate></ItemsControl></ScrollViewer></Grid>
           </Border>
         </Grid>
+      </TabItem>
+      <TabItem Header="{DynamicResource Tab.Record}">
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="8" Spacing="16">
+          <StackPanel Spacing="3">
+            <TextBlock Classes="heading" Text="{DynamicResource Rec.Title}"/>
+            <TextBlock Foreground="#A9B1BA" Text="{DynamicResource Rec.Hint}" TextWrapping="Wrap"/>
+          </StackPanel>
+
+          <!-- 状态与统计 -->
+          <Border Classes="panel">
+            <StackPanel Spacing="8">
+              <TextBlock Classes="rec-status" Classes.recording="{Binding Recording.IsRecording}"
+                         Text="{Binding Recording.StatusLabel}"/>
+              <Grid ColumnDefinitions="*,*,*" ColumnSpacing="10">
+                <Border Background="#161A1F" BorderBrush="#2C333B" BorderThickness="1" CornerRadius="4" Padding="10,6">
+                  <StackPanel Spacing="2"><TextBlock FontSize="11" Foreground="#7F8A95" Text="{DynamicResource Rec.FramesHeader}"/><TextBlock FontSize="16" FontWeight="SemiBold" Text="{Binding Recording.FrameCountLabel}"/></StackPanel>
+                </Border>
+                <Border Grid.Column="1" Background="#161A1F" BorderBrush="#2C333B" BorderThickness="1" CornerRadius="4" Padding="10,6">
+                  <StackPanel Spacing="2"><TextBlock FontSize="11" Foreground="#7F8A95" Text="{DynamicResource Rec.DurationHeader}"/><TextBlock FontSize="16" FontWeight="SemiBold" Text="{Binding Recording.DurationLabel}"/></StackPanel>
+                </Border>
+                <Border Grid.Column="2" Background="#161A1F" BorderBrush="#2C333B" BorderThickness="1" CornerRadius="4" Padding="10,6">
+                  <StackPanel Spacing="2"><TextBlock FontSize="11" Foreground="#7F8A95" Text="{DynamicResource Tele.HeaderRate}"/><TextBlock FontSize="16" FontWeight="SemiBold" Text="{Binding Telemetry.ActualRateLabel}"/></StackPanel>
+                </Border>
+              </Grid>
+              <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
+                <Button Classes="primary" Command="{Binding StartRecordingCommand}" Content="{DynamicResource Rec.Start}" ToolTip.Tip="{DynamicResource Rec.StartTip}"/>
+                <Button Command="{Binding StopRecordingCommand}" Content="{DynamicResource Rec.Stop}"/>
+                <Button Command="{Binding OpenRecordingFolderCommand}" Content="{DynamicResource Rec.OpenFolder}"/>
+                <Button Command="{Binding RateTestCommand}" Content="{DynamicResource Rec.RateTest}"/>
+              </StackPanel>
+              <TextBlock FontSize="13" Foreground="#9FE1CB" IsVisible="{Binding HasRateTestResult}"
+                         Text="{Binding RateTestResult}" TextWrapping="Wrap"/>
+            </StackPanel>
+          </Border>
+
+          <!-- 录制字段开关（存储层 field_mask：时间戳恒录，其余四组独立裁剪） -->
+          <Border Classes="panel">
+            <StackPanel Spacing="8">
+              <TextBlock Classes="section" Margin="0" Text="{DynamicResource Rec.Fields}"/>
+              <!-- WrapPanel 在当前 Avalonia 版本无 Spacing 属性，用 Margin 代替间距 -->
+              <WrapPanel Orientation="Horizontal">
+                <CheckBox Margin="0,0,18,4" IsChecked="{Binding Recording.IncludeTouch}" Content="{DynamicResource Rec.FieldTouch}"/>
+                <CheckBox Margin="0,0,18,4" IsChecked="{Binding Recording.IncludeFiltered}" Content="{DynamicResource Rec.FieldFiltered}"/>
+                <CheckBox Margin="0,0,18,4" IsChecked="{Binding Recording.IncludeBaseline}" Content="{DynamicResource Rec.FieldBaseline}"/>
+                <CheckBox Margin="0,0,18,4" IsChecked="{Binding Recording.IncludeStatus}" Content="{DynamicResource Rec.FieldStatus}"/>
+                <CheckBox Margin="0,0,0,4" IsChecked="{Binding Recording.IncludeExtended}" Content="{DynamicResource Rec.FieldExtended}"
+                          ToolTip.Tip="{DynamicResource Rec.ExtendedHint}"/>
+              </WrapPanel>
+              <TextBlock FontSize="11" Foreground="#A9B1BA" TextWrapping="Wrap" Text="{DynamicResource Rec.FormatHint}"/>
+            </StackPanel>
+          </Border>
+
+          <!-- 产出文件 -->
+          <Border Classes="panel">
+            <StackPanel Spacing="8">
+              <TextBlock Classes="section" Margin="0" Text="{DynamicResource Rec.File}"/>
+              <TextBlock FontSize="11" Foreground="#A9B1BA" TextWrapping="Wrap" Text="{DynamicResource Rec.FormatHint}"/>
+              <SelectableTextBlock FontFamily="Consolas,Menlo,monospace" FontSize="11" TextWrapping="Wrap"
+                                   Text="{Binding Recording.FilePath}"
+                                   IsVisible="{Binding Recording.HasFilePath}"/>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+        </ScrollViewer>
       </TabItem>
       <TabItem Header="{DynamicResource Tab.Mcp}">
         <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">

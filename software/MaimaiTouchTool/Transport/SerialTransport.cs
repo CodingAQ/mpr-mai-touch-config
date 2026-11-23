@@ -262,16 +262,58 @@ public sealed class SerialTransport(IByteStream stream) : IEventRequestClient, I
 
     // Await the consumer: UI callbacks must not synchronously wait for their own dispatcher.
     // At most one callback is pending, so a slow renderer cannot grow an unbounded UI queue.
-    public async Task<StreamStartInfo> StreamDebugEventsAwaitedAsync(ushort requestedRateHz, Func<DebugFrameEvent, Task> onFrame, Func<Exception, Task> onError, CancellationToken cancellationToken = default, Func<StreamStartInfo, Task>? onStarted = null)
+    // fieldMask/channelMask 非 null 时发送 10B 掩码请求（协议 1.3，固件按掩码裁剪采样与帧负载）；
+    // 为 null 时发送旧 2B 请求（固件回 0x90 全家桶）。掩码请求的应答帧为 0x91 可变长。
+    public async Task<StreamStartInfo> StreamDebugEventsAwaitedAsync(ushort requestedRateHz, Func<DebugFrameEvent, Task> onFrame, Func<Exception, Task> onError, CancellationToken cancellationToken = default, Func<StreamStartInfo, Task>? onStarted = null,
+        byte? fieldMask = null, ulong? channelMask = null)
     {
-        var startPayload = new byte[2]; BinaryPrimitives.WriteUInt16LittleEndian(startPayload, requestedRateHz);
+        byte[] startPayload;
+        byte debugFrameType;
+        if (fieldMask.HasValue)
+        {
+            startPayload = new byte[10];
+            BinaryPrimitives.WriteUInt16LittleEndian(startPayload, requestedRateHz);
+            startPayload[2] = fieldMask.Value;
+            var channels = channelMask ?? ProtocolConstants.AllChannelsMask;
+            for (var i = 0; i < 6; i++) startPayload[4 + i] = (byte)(channels >> (8 * i));
+            debugFrameType = (byte)ProtocolConstants.FrameType.DebugFrameMasked;
+        }
+        else
+        {
+            startPayload = new byte[2]; BinaryPrimitives.WriteUInt16LittleEndian(startPayload, requestedRateHz);
+            debugFrameType = (byte)ProtocolConstants.FrameType.DebugFrame;
+        }
         // 整段流（含收尾的 STREAM_STOP）独占端口：否则调用方「先停流、再立刻 Apply」时，
         // 两边各开一个读循环，APPLY_CFG 的 ACK 会被 STREAM_STOP 的读循环吞掉。
         await EnterPortAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var ackFrame = await SendRequestCoreAsync((byte)ProtocolConstants.FrameType.StreamStart, startPayload, cancellationToken, gateAlreadyHeld: true).ConfigureAwait(false);
-            if (ackFrame.Type == (byte)ProtocolConstants.FrameType.Error) { var e = ErrorPayload.Decode(ackFrame.Payload); throw new InvalidOperationException($"STREAM_START was rejected: {Enum.GetName((ProtocolConstants.ErrorStatus)e.Status) ?? $"status {e.Status}"}."); }
+            // START 的应答获取：板子若因上一次异常退出仍留在 STREAMING，会回 BUSY——
+            // 此时补一个 STOP 把它拉回 CONFIG_IDLE 再重试一次 START，用户无需拔插/重连即可自愈。
+            ProtocolFrame ackFrame;
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    ackFrame = await SendRequestCoreAsync((byte)ProtocolConstants.FrameType.StreamStart, startPayload, cancellationToken, gateAlreadyHeld: true).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    // START 的 ACK 丢失 ≠ 板子没收到：固件可能已进入 STREAMING 并开始推帧。
+                    // 若不清理，板子会永远卡在流模式（协议帧被静默忽略/DTR 掉线才复位），
+                    // 之后的所有命令全部超时。尽力补发 STREAM_STOP 后把超时如实上抛。
+                    if (attempt > 1) throw;
+                    try { await SendRequestCoreAsync((byte)ProtocolConstants.FrameType.StreamStop, [], CancellationToken.None, gateAlreadyHeld: true).ConfigureAwait(false); }
+                    catch { /* 清理失败时保留原始超时异常 */ }
+                    continue;
+                }
+                if (ackFrame.Type != (byte)ProtocolConstants.FrameType.Error) break;
+                var e = ErrorPayload.Decode(ackFrame.Payload);
+                if (e.Status != (byte)ProtocolConstants.ErrorStatus.Busy || attempt > 1)
+                    throw new InvalidOperationException($"STREAM_START was rejected: {Enum.GetName((ProtocolConstants.ErrorStatus)e.Status) ?? $"status {e.Status}"}.");
+                try { await SendRequestCoreAsync((byte)ProtocolConstants.FrameType.StreamStop, [], cancellationToken, gateAlreadyHeld: true).ConfigureAwait(false); }
+                catch { /* STOP 失败则让重试的 START 自然报错 */ }
+            }
             var ack = AckPayload.Decode(ackFrame.Payload); if (ack.Status != 0) throw new InvalidOperationException($"STREAM_START was rejected: {Enum.GetName((ProtocolConstants.ErrorStatus)ack.Status) ?? $"status {ack.Status}"}.");
             var rate = StreamStartResult.Decode(ack.Result);
             if (rate.AcceptedRateHz == 0 || rate.ActualRateHz == 0) throw new FormatException("STREAM_START returned no measurable rate.");
@@ -288,8 +330,14 @@ public sealed class SerialTransport(IByteStream stream) : IEventRequestClient, I
                     foreach (var response in parser.Push(buffer.AsMemory(0, count), DateTimeOffset.UtcNow))
                     {
                         cancellationToken.ThrowIfCancellationRequested();
-                        if (response.Type != (byte)ProtocolConstants.FrameType.DebugFrame) continue;
-                        try { await onFrame(new DebugFrameEvent(response.Sequence, DebugFrame.Decode(response.Payload), DateTimeOffset.UtcNow)).ConfigureAwait(false); }
+                        if (response.Type != debugFrameType) continue;
+                        try
+                        {
+                            var frame = debugFrameType == (byte)ProtocolConstants.FrameType.DebugFrameMasked
+                                ? DebugFrame.DecodeMasked(response.Payload)
+                                : DebugFrame.Decode(response.Payload);
+                            await onFrame(new DebugFrameEvent(response.Sequence, frame, DateTimeOffset.UtcNow)).ConfigureAwait(false);
+                        }
                         catch (FormatException error) { await onError(error).ConfigureAwait(false); }
                     }
                 }
