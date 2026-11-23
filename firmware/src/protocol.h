@@ -28,6 +28,7 @@ constexpr uint8_t TypeStreamStop = 0x31;
 constexpr uint8_t TypeError = 0x7F;
 constexpr uint8_t TypeAck = 0x80;
 constexpr uint8_t TypeDebugFrame = 0x90;
+constexpr uint8_t TypeDebugFrameMasked = 0x91;  // 掩码录制帧（协议 1.3）：负载按 field_mask 可变长
 
 constexpr uint8_t StatusOk = 0x00;
 constexpr uint8_t StatusBadFrame = 0x01;

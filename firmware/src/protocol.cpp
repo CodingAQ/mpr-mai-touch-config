@@ -51,6 +51,8 @@ bool isKnownRequestType(uint8_t type) {
     case TypeCalibrate:
     case TypeStreamStart:
     case TypeStreamStop:
+      // 注意：TypeDebugFrameMasked 是固件下行的事件类型，不是请求，不要登记在这里——
+      // 登记后误发的 0x91 会通过合法性校验再落到未知请求分支，语义是错的。
       return true;
     default:
       return false;
@@ -72,7 +74,9 @@ bool validPayloadLength(uint8_t type, uint16_t length) {
     case TypeCalibrate:
       return length == 3;
     case TypeStreamStart:
-      return length == 2;
+      return length == 2 || length == 10;  // 2 = 旧版（rate only）；10 = 掩码模式（rate + field_mask + channel_mask u48）
+    case TypeDebugFrameMasked:
+      return length >= 5 && length <= MaxPayload;  // mask u8 + ts u32 + 可变字段，最小 5
     default:
       return false;
   }

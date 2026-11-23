@@ -1,6 +1,6 @@
 # maimai Touch Controller Protocol
 
-Status: protocol version 1.2. This document is the byte-level
+Status: protocol version 1.3. This document is the byte-level
 source of truth for the firmware and the desktop tool. The USB CDC serial port
 is single-owner: the game and the tool must not use it at the same time.
 
@@ -13,6 +13,13 @@ config schema 3, 99-byte blob, 251-byte telemetry). Firmware accepts schema-2
 SET_CFG and migrates valid schema-2 storage records with compensation off.
 The updated tool supports both firmware generations; feature controls require bit 5.
 Legacy game framing and key bit order are unchanged. Old tools must be upgraded
+
+Protocol 1.3 adds the masked recording mode (capability bit 6, `0x40`): a
+10-byte STREAM_START request carrying a field mask and a 48-bit channel mask,
+answered by variable-length type `0x91` debug frames. The 2-byte STREAM_START
+request and the fixed type `0x90` frames are unchanged and remain the default;
+a tool that never sends the extended request gets byte-identical behavior to
+protocol 1.2. See sections 5.5 and 5.6.
 before connecting to firmware that returns the extended config/telemetry.
 
 ## 1. Conventions
@@ -37,7 +44,7 @@ Every new-protocol frame has this layout:
 |---:|---:|---|---|
 | 0 | 1 | sync0 | `0xAA` |
 | 1 | 1 | sync1 | `0x55` |
-| 2 | 1 | version | `0x12` for protocol 1.2 (`major << 4 | minor`); accepts 1.x known frames |
+| 2 | 1 | version | `0x13` for protocol 1.3 (`major << 4 | minor`); accepts 1.x known frames |
 | 3 | 1 | type | Request, response, event, or debug type |
 | 4 | 2 | seq | Little-endian request sequence number |
 | 6 | 2 | len | Little-endian payload length, `0..256` |
@@ -129,7 +136,10 @@ interpreted in CONFIG mode.
 
 ### STREAMING
 
-The device emits type `0x90` debug frames at the accepted actual rate. Legal
+The device emits debug frames at the accepted actual rate: type `0x90` fixed
+frames unless the stream was started with the extended 10-byte STREAM_START
+request, in which case type `0x91` masked frames (section 5.6) carry only the
+requested fields. Legal
 requests are `VERSION`, `STREAM_STOP`, and `EXIT_CFG`. Configuration, save, and
 calibration requests receive `ERROR(BUSY)`. A stream frame always uses
 `seq=0`; it is not a reply to the last request.
@@ -269,16 +279,33 @@ events also copy the originating request sequence in their frame header.
 | `0x12` | tool -> firmware | SAVE_CFG | 0 bytes |
 | `0x13` | tool -> firmware | APPLY_CFG | 0 bytes |
 | `0x20` | tool -> firmware | CALIBRATE | 3 bytes |
-| `0x30` | tool -> firmware | STREAM_START | 2 bytes |
+| `0x30` | tool -> firmware | STREAM_START | 2 bytes, or 10 bytes (masked recording, protocol 1.3) |
 | `0x31` | tool -> firmware | STREAM_STOP | 0 bytes |
 | `0x21` | firmware -> tool | CAL_DONE | asynchronous event |
 | `0x7F` | firmware -> tool | ERROR | error payload |
 | `0x80` | firmware -> tool | ACK | acknowledgement payload |
 | `0x90` | firmware -> tool | DEBUG_FRAME | 251 bytes (legacy 207) |
+| `0x91` | firmware -> tool | DEBUG_FRAME_MASKED | variable, per field mask (section 5.6) |
 
-STREAM_START's two-byte request payload is `requested_rate_hz:u16`,
-little-endian. `0` requests the default of 100 Hz. Nonzero values request that
+STREAM_START's request payload is `requested_rate_hz:u16`, little-endian.
+`0` requests the default of 100 Hz. Nonzero values request that
 rate subject to device capability and the returned actual rate.
+
+With capability bit 6 set, the tool may instead send a 10-byte request:
+
+| Offset | Size | Field |
+|---:|---:|---|
+| 0 | 2 | `requested_rate_hz:u16`, little-endian, same semantics as above |
+| 2 | 1 | `field_mask:u8` — bit 0 touch, bit 1 filtered, bit 2 baseline, bit 3 status, bit 4 extended; zero or unknown bits set → `ERROR(INVALID_VALUE)` |
+| 3 | 1 | `reserved:u8` — send zero; keeps `channel_mask` aligned at offset 4 |
+| 4 | 6 | `channel_mask:u48`, little-endian — bit `(12*board + channel)` enables that diagnostic channel; all-zero means every channel enabled |
+
+A 10-byte request switches the stream to type `0x91` masked frames for the
+rest of the stream; a 2-byte request keeps type `0x90`. Fields that are masked
+out are omitted from the frame entirely, and a board with no enabled channel
+is never accessed over I2C during the stream — this is what shortens the frame
+period. `field_mask = 0x1F` with an all-zero channel mask reproduces the full
+`0x90` content (in `0x91` framing).
 
 ### 5.1 ACK payload
 
@@ -356,7 +383,10 @@ the configurable key mapping: config schema 2, the 93-byte config blob, and
 bit 4 and refuse to connect with a clear "firmware too old" message rather than
 send a 93-byte `SET_CFG` that an older firmware would reject with
 `ERROR(BAD_LENGTH)`. Protocol 1.2 adds bit 5 (`0x20`): experimental compensation,
-schema 3 and extended telemetry. Bits 6..31 remain zero. Because the mapping only changes
+schema 3 and extended telemetry. Protocol 1.3 adds bit 6 (`0x40`): masked
+recording — the 10-byte STREAM_START request and variable-length `0x91` debug
+frames of section 5.6. A tool must check bit 6 before sending the 10-byte
+request; older firmware rejects it with `ERROR(BAD_LENGTH)`. Bits 7..31 remain zero. Because the mapping only changes
 how the game output is assembled, a device that reports bit 4 set is still
 bit-for-bit compatible with the legacy game protocol in section 4.
 
@@ -581,6 +611,47 @@ Risks: false release during a real hold, missed weak touches, sampling overhead,
 slower transitions on corrected keys, and delayed first recovery. Validate long holds,
 fast area changes, slides, light taps, repeated taps and simultaneous keys on hardware
 before enabling output correction. Host tests cannot establish gameplay safety.
+
+### 5.6 Masked debug frame (`0x91`, protocol 1.3)
+
+Sent only when the stream was started with the 10-byte STREAM_START request.
+The payload starts with the `field_mask` byte echoed back, so a receiver can
+always derive the layout without out-of-band state:
+
+| Offset | Size | Field | Present when |
+|---:|---:|---|---|
+| 0 | 1 | `field_mask:u8` echoed (bit 4 set iff extended data is appended) | always |
+| 1 | 4 | `timestamp_ms:u32`, little-endian | always |
+| 5 | 5 | `touch:34bit-packed`, same order/rule as `0x90` | bit 0 |
+| 10 | 96 | `filtered[48]:u16` | bit 1 |
+| — | 48 | `baseline[48]:u8` raw 8-bit register values (`<<2` restores the 10-bit value) | bit 2 |
+| — | 4 | `chip_status[4]:u8` | bit 3 |
+| — | 2 | `i2c_errors:u16`, cumulative | bit 3 |
+| — | 5 | raw hardware touch bits (same as `0x90` offset 207) | bit 4 |
+| — | 34 | candidate thresholds (same as `0x90` offset 212) | bit 4 |
+| — | 5 | active compensation bits (same as `0x90` offset 246) | bit 4 |
+
+Full-frame size is `5 + 5 + 96 + 48 + 6 + 44 = 204` bytes; the minimum
+(touch-less, status-less probe) is 5 bytes. Field-mask semantics for the
+stream:
+
+- Disabled fields are omitted, never zero-filled; the echoed mask is the
+  authoritative layout description.
+- A board with no enabled channel in `channel_mask` is excluded from I2C
+  sampling for the whole stream: its TOUCHSTATUS, filtered and baseline
+  registers are never read, so the frame period shortens accordingly. The
+  key bits that map into such a board read as 0.
+- Disabled channels inside an otherwise enabled board are sampled (the chip
+  reads all 12 channels of a board in one burst) but their filtered/baseline
+  values are transmitted as 0.
+- `chip_status` keeps reporting online/initialized/I2C-error bits for all
+  boards regardless of the channel mask; the baseline-valid bit (bit 2) is
+  only set for boards whose baseline was actually read.
+- The extended block (bit 4) is appended whenever the extended data exists
+  (compensation firmware); its content matches the `0x90` bytes 207..250.
+
+The recording tool stores received frames verbatim in the `.mtr` archive whose
+per-record field mask uses the same bit definitions.
 
 ## 6. Errors and timeouts
 

@@ -19,6 +19,7 @@ CMakeFiles/
 *.recipe
 *.tlog
 *.lastbuildstate
+/build/
 
 # ---------- Agent / IDE working data ----------
 .omo/
@@ -27,6 +28,7 @@ CMakeFiles/
 .idea/
 .vs/
 .vscode/
+.workbuddy/
 
 # ---------- Third-party checkout (independent repository) ----------
 opencode-token-metrics/
@@ -42,3 +44,6 @@ Desktop.ini
 .DS_Store
 .opencode
 opencode.json
+
+# ---------- Temp Files ----------
+PROTOCOL_ZH.md
